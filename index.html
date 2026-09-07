@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#090b0f" />
+  <title>Индикатор Лжи — Engine v0.1</title>
+  <style>
+    :root{
+      --bg:#090b0f;
+      --panel:#0f1218;
+      --panel2:#121722;
+      --line:#202737;
+      --text:#f4f6fb;
+      --muted:#8f98aa;
+      --accent:#e7b14a;
+      --good:#64d39a;
+      --bad:#f27373;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    body{min-height:100vh}
+    button,input{font:inherit}
+    .shell{max-width:1180px;margin:0 auto;padding:22px}
+    .topbar{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;margin-bottom:18px}
+    .brand h1{margin:0;font-size:20px;letter-spacing:.08em;font-weight:700}
+    .brand p{margin:6px 0 0;color:var(--muted);font-size:13px;max-width:740px;line-height:1.5}
+    .badge{border:1px solid var(--line);background:#0d1016;padding:8px 10px;border-radius:10px;color:var(--accent);font:600 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+    .grid{display:grid;grid-template-columns:340px minmax(0,1fr);gap:16px}
+    .panel{background:linear-gradient(180deg,#0f1218,#0c0f14);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+    .panel-head{padding:15px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}
+    .panel-head h2{font-size:13px;margin:0;letter-spacing:.08em;text-transform:uppercase}
+    .panel-body{padding:16px}
+    .dropzone{border:1px dashed #31394a;border-radius:14px;padding:20px 14px;text-align:center;background:#0b0e13;transition:.2s}
+    .dropzone.drag{border-color:var(--accent);background:#12120f}
+    .dropzone strong{display:block;font-size:14px;margin-bottom:6px}
+    .dropzone span{color:var(--muted);font-size:12px;line-height:1.45;display:block}
+    .dropzone input{display:none}
+    .btn{border:1px solid #30394a;background:#151a23;color:var(--text);padding:10px 12px;border-radius:10px;cursor:pointer;transition:.15s}
+    .btn:hover{transform:translateY(-1px);border-color:#475268}
+    .btn.primary{background:var(--accent);border-color:var(--accent);color:#111;font-weight:800}
+    .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+    .row{display:flex;gap:9px;flex-wrap:wrap}
+    .thumbs{display:grid;gap:8px;margin-top:12px}
+    .thumb{display:grid;grid-template-columns:64px 1fr auto;gap:10px;align-items:center;border:1px solid var(--line);background:#0b0e13;border-radius:12px;padding:7px}
+    .thumb img{width:64px;height:46px;object-fit:cover;border-radius:8px;background:#050608}
+    .thumb .meta{min-width:0}
+    .thumb .name{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .thumb .sub{font-size:11px;color:var(--muted);margin-top:4px}
+    .thumb button{border:0;background:transparent;color:#697389;font-size:18px;cursor:pointer}
+    .controls{display:grid;gap:12px;margin-top:16px}
+    .field label{font-size:11px;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:6px}
+    .field input[type=range]{width:100%;accent-color:var(--accent)}
+    .field select{width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:#0b0e13;color:var(--text)}
+    .canvas-wrap{position:relative;background:#05070a;min-height:430px}
+    canvas{display:block;width:100%;height:auto;min-height:430px}
+    .empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:#657083;padding:30px;pointer-events:none}
+    .empty.hidden{display:none}
+    .statusbar{display:flex;gap:8px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--line);background:#0b0e13}
+    .chip{font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#aab2c1;border:1px solid var(--line);border-radius:999px;padding:7px 9px}
+    .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+    .metric{border:1px solid var(--line);background:#0b0e13;border-radius:12px;padding:12px}
+    .metric .k{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+    .metric .v{font:700 16px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;margin-top:7px}
+    .scenarios{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+    .scenario{border:1px solid var(--line);background:#0b0e13;border-radius:12px;padding:13px}
+    .scenario-top{display:flex;justify-content:space-between;gap:10px;align-items:center}
+    .scenario .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+    .scenario .prob{font:800 20px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
+    .scenario p{margin:10px 0 0;color:#a9b2c1;font-size:12px;line-height:1.5}
+    .note{font-size:11px;color:#768196;line-height:1.5;margin-top:12px}
+    .legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;color:#9ba5b6;font-size:11px}
+    .legend i{display:inline-block;width:18px;height:2px;vertical-align:middle;margin-right:6px;background:#bbb}
+    .legend i.a{background:#e7b14a}
+    .legend i.b{background:#8d96ff}
+    .legend i.hist{background:#dde2eb}
+    @media(max-width:880px){
+      .grid{grid-template-columns:1fr}
+      .topbar{flex-direction:column}
+      .metrics{grid-template-columns:repeat(2,1fr)}
+    }
+    @media(max-width:520px){
+      .shell{padding:12px}
+      .metrics,.scenarios{grid-template-columns:1fr 1fr}
+      .canvas-wrap,canvas{min-height:330px}
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="topbar">
+      <div class="brand">
+        <h1>ИНДИКАТОР ЛЖИ</h1>
+        <p>Базовый визуально-вероятностный движок. Загружает несколько скриншотов графика, восстанавливает нормализованную траекторию движения и строит два семейства будущих сценариев через симуляцию участников.</p>
+      </div>
+      <div class="badge">ENGINE v0.1</div>
+    </div>
+
+    <section class="grid">
+      <aside class="panel">
+        <div class="panel-head">
+          <h2>Входные данные</h2>
+          <span id="fileCount" class="chip">0 файлов</span>
+        </div>
+        <div class="panel-body">
+          <label id="dropzone" class="dropzone">
+            <input id="files" type="file" accept="image/*" multiple />
+            <strong>Добавить скриншоты</strong>
+            <span>M5 / M15 / H1 / H4 — до 6 изображений. Для v0.1 график определяется локально в браузере.</span>
+          </label>
+
+          <div id="thumbs" class="thumbs"></div>
+
+          <div class="controls">
+            <div class="field">
+              <label><span>Число симуляций</span><b id="simValue">3000</b></label>
+              <input id="simulations" type="range" min="500" max="10000" step="500" value="3000">
+            </div>
+
+            <div class="field">
+              <label><span>Горизонт продолжения</span><b id="horizonValue">90</b></label>
+              <input id="horizon" type="range" min="30" max="180" step="10" value="90">
+            </div>
+
+            <div class="field">
+              <label><span>Профиль рынка</span></label>
+              <select id="marketProfile">
+                <option value="lowcap">Low-cap meme $5–30M</option>
+                <option value="microcap">Micro-cap meme &lt;$5M</option>
+                <option value="midcap">Mid-cap meme $30–250M</option>
+              </select>
+            </div>
+
+            <div class="row">
+              <button id="analyzeBtn" class="btn primary" disabled>Анализировать</button>
+              <button id="resetBtn" class="btn" disabled>Сбросить</button>
+            </div>
+          </div>
+
+          <p class="note">
+            В этой версии нет on-chain/API-данных. Состав участников задаётся априорной моделью, а визуальный график влияет только на состояние движения: скорость, ускорение, шум, диапазон и локальный drawdown. Это специально не технический анализ.
+          </p>
+        </div>
+      </aside>
+
+      <section>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Визуальная модель</h2>
+            <div class="legend">
+              <span><i class="hist"></i>история</span>
+              <span><i class="a"></i>модель A</span>
+              <span><i class="b"></i>модель B</span>
+            </div>
+          </div>
+
+          <div class="canvas-wrap">
+            <canvas id="chartCanvas" width="1400" height="760"></canvas>
+            <div id="empty" class="empty">Загрузите хотя бы один скриншот графика.</div>
+          </div>
+
+          <div class="statusbar">
+            <span id="status" class="chip">ожидание</span>
+            <span id="recognition" class="chip">распознавание —</span>
+            <span id="confidence" class="chip">confidence —</span>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top:16px">
+          <div class="panel-head"><h2>Состояние движка</h2></div>
+          <div class="panel-body">
+            <div class="metrics">
+              <div class="metric"><div class="k">Momentum state</div><div id="mMomentum" class="v">—</div></div>
+              <div class="metric"><div class="k">Volatility</div><div id="mVol" class="v">—</div></div>
+              <div class="metric"><div class="k">Acceleration</div><div id="mAccel" class="v">—</div></div>
+              <div class="metric"><div class="k">Drawdown</div><div id="mDraw" class="v">—</div></div>
+            </div>
+
+            <div class="scenarios">
+              <div class="scenario">
+                <div class="scenario-top">
+                  <span class="label">Model A</span>
+                  <span id="probA" class="prob">—</span>
+                </div>
+                <p id="descA">—</p>
+              </div>
+              <div class="scenario">
+                <div class="scenario-top">
+                  <span class="label">Model B</span>
+                  <span id="probB" class="prob">—</span>
+                </div>
+                <p id="descB">—</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
