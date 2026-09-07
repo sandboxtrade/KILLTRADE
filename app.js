@@ -59,7 +59,12 @@
     demandReserveBar: $("demandReserveBar"),
     reserveDetail: $("reserveDetail"),
     reserveA: $("reserveA"),
-    reserveB: $("reserveB")
+    reserveB: $("reserveB"),
+    analysisOverlay: $("analysisOverlay"),
+    analysisProgress: $("analysisProgress"),
+    analysisPercent: $("analysisPercent"),
+    analysisStage: $("analysisStage"),
+    analysisDetail: $("analysisDetail")
   };
 
   const ctx = els.canvas.getContext("2d");
@@ -261,6 +266,8 @@
   };
 
   function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
+  function finite(x, fallback=0){ return Number.isFinite(x) ? x : fallback; }
+  function finitePositive(x, fallback=1){ return Number.isFinite(x) && x>0 ? x : fallback; }
   function lerp(a,b,t){ return a + (b-a)*t; }
   function mean(a){ return a.length ? a.reduce((s,v)=>s+v,0)/a.length : 0; }
   function std(a){ if (!a.length) return 0; const m=mean(a); return Math.sqrt(mean(a.map(v=>(v-m)*(v-m)))); }
@@ -297,6 +304,27 @@
       out.push(lerp(arr[a], arr[b], t-a));
     }
     return out;
+  }
+
+  function setAnalysisProgress(progress, stage, detail=''){
+    const p=clamp(finite(progress,0),0,100);
+    if(els.analysisProgress) els.analysisProgress.style.width=`${p.toFixed(1)}%`;
+    if(els.analysisPercent) els.analysisPercent.textContent=`${Math.round(p)}%`;
+    if(els.analysisStage && stage) els.analysisStage.textContent=stage;
+    if(els.analysisDetail) els.analysisDetail.textContent=detail || '';
+  }
+
+  function showAnalysisOverlay(stage='Подготовка анализа'){
+    if(!els.analysisOverlay) return;
+    els.analysisOverlay.classList.add('visible');
+    document.body.classList.add('analysis-lock');
+    setAnalysisProgress(2,stage,'Подготавливаем входные данные');
+  }
+
+  function hideAnalysisOverlay(){
+    if(!els.analysisOverlay) return;
+    els.analysisOverlay.classList.remove('visible');
+    document.body.classList.remove('analysis-lock');
   }
 
   function inferTimeframe(name){
@@ -1147,7 +1175,7 @@
     const market={
       price:1,
       attention,
-      liquidityBuffer:clamp(baseLiquidity*regimeDef.liquidity,.24,1.8),
+      liquidityBuffer:clamp(baseLiquidity*finite(regimeDef.liquidityBuffer,1),.24,1.8),
       regime,
       reactionState:{},
       profitReleaseStress:0,
@@ -1715,7 +1743,7 @@
       1 - memory.liquidityFatigue*.34 - memory.absorptionFatigue*.22 - memory.capitalDepletion*.16 + memory.absorptionConfidence*(1-memory.capitalDepletion)*.10,
       .48,1.10
     );
-    const regimeLiquidityTarget=clamp((m.regime==='liquidity_vacuum'?.62:1.0)*regimeDef.liquidity*retreatMultiplier*memoryLiquidityMultiplier,.20,1.8);
+    const regimeLiquidityTarget=clamp((m.regime==='liquidity_vacuum'?.62:1.0)*finite(regimeDef.liquidityBuffer,1)*retreatMultiplier*memoryLiquidityMultiplier,.20,1.8);
     const stress=clamp(
       imbalance*(.52 + Math.abs(crowdShock)) +
       v.crowdStress*.16 +
@@ -1756,10 +1784,12 @@
     const continuityRet=.034*v.continuityTrace*continuityFade;
 
     let ret=ENGINE_BEHAVIOR_WEIGHT*behaviorRet + ENGINE_CONTINUITY_WEIGHT*continuityRet;
-    ret=clamp(ret,-.11,.11);
+    ret=clamp(finite(ret,0),-.11,.11);
 
-    m.price*=Math.exp(ret);
-    m.lastReturn=ret;
+    const previousPrice=finitePositive(m.price,1);
+    const nextPrice=previousPrice*Math.exp(ret);
+    m.price=finitePositive(nextPrice,previousPrice);
+    m.lastReturn=finite(ret,0);
     m.attention=clamp(
       m.attention + .15*Math.abs(ret) + .035*v.reflexivity + regimeDef.attention*.08 - .014*(m.attention-.45) + gauss()*.006,
       .05,.99
@@ -1798,7 +1828,8 @@
     const interactionSummary={};
     const regimeOccupancy={};
     const simMeta=[];
-    const batch=200;
+    let invalidStepCount=0;
+    const batch=100;
 
     for(let s=0;s<simulations;s++){
       const m=initMarket(profile,visual,regimes,marketStateBuckets);
@@ -1822,6 +1853,14 @@
         localRegimes[m.regime]=(localRegimes[m.regime]||0)+1;
         const beforeState=systemStateSnapshot(m);
         const stepResult=stepMarket(m,t,horizon);
+        if(!Number.isFinite(stepResult.price) || stepResult.price<=0){
+          invalidStepCount++;
+          const fallback=finitePositive(path[path.length-1],1);
+          stepResult.price=fallback;
+          stepResult.ret=0;
+          m.price=fallback;
+          m.lastReturn=0;
+        }
         const afterState=systemStateSnapshot(m);
         const transition=buildTransitionRecord(beforeState,afterState,stepResult,t);
         updateMarketMemory(m,beforeState,afterState,stepResult,transition);
@@ -1887,12 +1926,14 @@
       });
 
       if((s+1)%batch===0 && s+1<simulations){
-        if(els.status) els.status.textContent=`симуляция ${Math.round((s+1)/simulations*100)}%`;
+        const simProgress=(s+1)/simulations;
+        if(els.status) els.status.textContent=`симуляция ${Math.round(simProgress*100)}%`;
+        setAnalysisProgress(20+simProgress*68,'Моделирование рынка',`${(s+1).toLocaleString('ru-RU')} из ${simulations.toLocaleString('ru-RU')} симуляций`);
         await new Promise(resolve=>requestAnimationFrame(resolve));
       }
     }
 
-    return {paths,flowSummary,cohortFlowSummary,interactionSummary,regimeOccupancy,simMeta};
+    return {paths,flowSummary,cohortFlowSummary,interactionSummary,regimeOccupancy,simMeta,invalidStepCount};
   }
 
   function summarizePressureReserves(ids,simMeta){
@@ -1932,12 +1973,20 @@
   }
 
   function pathFeatures(path){
-    const start=path[0], end=path[path.length-1], max=Math.max(...path), min=Math.min(...path), mid=path[Math.floor(path.length*.5)], q1=path[Math.floor(path.length*.25)], q3=path[Math.floor(path.length*.75)];
-    const rets=path.slice(1).map((v,i)=>Math.log(v/path[i]));
-    return [Math.log(end/start), Math.log(max/start), Math.log(min/start), Math.log(mid/start), Math.log(q1/start), Math.log(q3/start), std(rets)*6];
+    const clean=(path||[]).map((v,i)=>finitePositive(v,i?finitePositive(path[i-1],1):1));
+    const start=finitePositive(clean[0],1), end=finitePositive(clean[clean.length-1],start), max=Math.max(...clean), min=Math.min(...clean), mid=clean[Math.floor(clean.length*.5)], q1=clean[Math.floor(clean.length*.25)], q3=clean[Math.floor(clean.length*.75)];
+    const rets=clean.slice(1).map((v,i)=>Math.log(finitePositive(v,clean[i])/finitePositive(clean[i],1))).filter(Number.isFinite);
+    return [Math.log(end/start), Math.log(max/start), Math.log(min/start), Math.log(mid/start), Math.log(q1/start), Math.log(q3/start), std(rets)*6].map(v=>finite(v,0));
   }
   function distance(a,b){ let s=0; for(let i=0;i<a.length;i++){ const d=a[i]-b[i]; s+=d*d; } return Math.sqrt(s); }
   function clusterTwo(paths){
+    // Последний барьер: один испорченный числовой шаг не должен ломать все сценарии.
+    paths=(paths||[]).map(path=>{
+      let prev=1;
+      return (path||[]).map(v=>{ prev=finitePositive(v,prev); return prev; });
+    });
+    if(!paths.length) paths=[[1,1],[1,1]];
+    if(paths.length===1) paths=[paths[0], [...paths[0]]];
     const feats=paths.map(pathFeatures);
     const terminal=feats.map((f,i)=>({i,v:f[0]})).sort((a,b)=>a.v-b.v);
     let c0=[...feats[terminal[Math.floor(terminal.length*.2)].i]], c1=[...feats[terminal[Math.floor(terminal.length*.8)].i]], labels=new Array(paths.length).fill(0);
@@ -2115,7 +2164,8 @@
   function pathToCandles(path, desiredCount, wickBoost=1){
     if(!path || path.length<2) return [];
     const count=clamp(Math.round(desiredCount || path.length/4), 12, 80);
-    const source=smooth(path,1);
+    const safePath=path.map((v,i)=>finitePositive(v,i?finitePositive(path[i-1],1):1));
+    const source=smooth(safePath,1).map((v,i)=>finitePositive(v,i?safePath[i-1]:1));
     const globalMoves=source.slice(1).map((v,i)=>v-source[i]);
     const globalVol=std(globalMoves) || 0.0025;
     const candles=[];
@@ -2171,17 +2221,20 @@
   }
 
   function scaleHistoryCandles(candles, futureSpan){
-    if(!candles.length) return [];
-    const all=[...candles.map(c=>c.h), ...candles.map(c=>c.l)], histRange=Math.max(1e-6, Math.max(...all)-Math.min(...all));
-    const amp=clamp(futureSpan*0.85, 0.18, 0.52);
-    return candles.map(c=>({o:1+c.o/histRange*amp, h:1+c.h/histRange*amp, l:1+c.l/histRange*amp, c:1+c.c/histRange*amp}));
+    const clean=(candles||[]).filter(c=>c && [c.o,c.h,c.l,c.c].every(Number.isFinite));
+    if(!clean.length) return [];
+    const all=[...clean.map(c=>c.h), ...clean.map(c=>c.l)], histRange=Math.max(1e-6, finite(Math.max(...all)-Math.min(...all),1));
+    const amp=clamp(finite(futureSpan,.20)*0.85, 0.18, 0.52);
+    return clean.map(c=>({o:1+c.o/histRange*amp, h:1+c.h/histRange*amp, l:1+c.l/histRange*amp, c:1+c.c/histRange*amp})).filter(c=>[c.o,c.h,c.l,c.c].every(Number.isFinite));
   }
 
   function drawCandles(candles,x0,x1,palette,yMap){
     if(!candles.length) return;
     const step=(x1-x0)/candles.length, bodyW=clamp(step*0.66,4,13);
     for(let i=0;i<candles.length;i++){
-      const c=candles[i], cx=x0+step*i+step*.5, up=c.c>=c.o;
+      const c=candles[i];
+      if(!c || ![c.o,c.h,c.l,c.c].every(Number.isFinite)) continue;
+      const cx=x0+step*i+step*.5, up=c.c>=c.o;
       const color=up?palette.up:palette.down, wickColor=up?(palette.wickUp||palette.up):(palette.wickDown||palette.down);
       const yo=yMap(c.o), yc=yMap(c.c), yh=yMap(c.h), yl=yMap(c.l);
       const top=Math.min(yo,yc), bottom=Math.max(yo,yc), bodyH=Math.max(2,bottom-top);
@@ -2192,7 +2245,9 @@
 
   function getScenarioVisuals(){
     const clusterA=lastResult.clusters[0], clusterB=lastResult.clusters[1], active=lastResult.clusters[selectedModel], ghost=lastResult.clusters[selectedModel===0?1:0];
-    const futureSpan=Math.max(Math.max(...clusterA.high)-Math.min(...clusterA.low), Math.max(...clusterB.high)-Math.min(...clusterB.low));
+    const spanA=finite(Math.max(...clusterA.high.filter(Number.isFinite))-Math.min(...clusterA.low.filter(Number.isFinite)),.20);
+    const spanB=finite(Math.max(...clusterB.high.filter(Number.isFinite))-Math.min(...clusterB.low.filter(Number.isFinite)),.20);
+    const futureSpan=Math.max(.02,spanA,spanB);
     const historyCandles=scaleHistoryCandles(lastResult.displayCandles, futureSpan);
     const activeCandles=pathToCandles(active.path, 26, 1.0);
     const ghostCandles=pathToCandles(ghost.path, 26, 0.9);
@@ -2210,10 +2265,13 @@
     const {historyCandles, activeCandles, ghostCandles, active}=getScenarioVisuals();
     const left=24, axisW=Math.max(62, Math.min(92, w*.11)), right=w-axisW, historyRatio=0.58, splitX=left+(right-left)*historyRatio;
     const lows=[...historyCandles.map(c=>c.l), ...activeCandles.map(c=>c.l), ...ghostCandles.map(c=>c.l)], highs=[...historyCandles.map(c=>c.h), ...activeCandles.map(c=>c.h), ...ghostCandles.map(c=>c.h)];
-    let lo=Math.min(...lows), hi=Math.max(...highs); const pad=(hi-lo)*0.12 || 0.08; lo-=pad; hi+=pad;
+    const finiteLows=lows.filter(Number.isFinite), finiteHighs=highs.filter(Number.isFinite);
+    let lo=finiteLows.length?Math.min(...finiteLows):.80, hi=finiteHighs.length?Math.max(...finiteHighs):1.20;
+    if(!Number.isFinite(lo)||!Number.isFinite(hi)||hi<=lo){ lo=.80; hi=1.20; }
+    const pad=Math.max(.01,(hi-lo)*0.12); lo-=pad; hi+=pad;
     const topPad=34, bottomPad=24;
-    const yMap=p=>h-bottomPad-(p-lo)/(hi-lo)*(h-topPad-bottomPad);
-    const invY=y=> lo + ((h-bottomPad-y)/(h-topPad-bottomPad))*(hi-lo);
+    const yMap=p=>h-bottomPad-(finite(p,1)-lo)/(hi-lo)*(h-topPad-bottomPad);
+    const invY=y=> finite(lo + ((h-bottomPad-y)/(h-topPad-bottomPad))*(hi-lo),1);
 
     ctx.save(); ctx.strokeStyle=COLORS.marker; ctx.setLineDash([5,6]); ctx.beginPath(); ctx.moveTo(splitX,18); ctx.lineTo(splitX,h-18); ctx.stroke(); ctx.restore();
     drawCandles(historyCandles,left,splitX,{up:COLORS.histUp,down:COLORS.histDown,wickUp:COLORS.histUp,wickDown:COLORS.histDown},yMap);
@@ -2289,8 +2347,11 @@
   async function analyze(){
     if(!files.length) return;
     els.analyzeBtn.disabled=true; els.status.textContent="распознавание"; els.empty.classList.add("hidden");
+    showAnalysisOverlay('Распознавание графика');
+    setAnalysisProgress(6,'Распознавание графика','Читаем загруженные изображения');
     try{
       const recog=await recognizeAll(files);
+      setAnalysisProgress(18,'Подготовка состояния рынка','Собираем входное состояние и поведенческие режимы');
       els.recognition.textContent=`распознавание ${(recog.confidence*100).toFixed(0)}% · свечи ${(recog.candleScore*100).toFixed(0)}%`;
       els.timeframeState.textContent=`ТФ ${recog.tfSummary || recog.displayBase.tfLabel}`;
       updateMetrics(recog.visual, recog.confidence);
@@ -2301,9 +2362,12 @@
       const cohortStates=buildStateCohorts(baseParticipantStates, recog.regimes, recog.visual);
       const marketStateBuckets=mergeStateCohorts(baseParticipantStates, cohortStates);
       renderMarketStateMap(marketStateBuckets);
+      setAnalysisProgress(20,'Моделирование рынка',`0 из ${simulations.toLocaleString('ru-RU')} симуляций`);
       const simResult=await runSimulations(recog.visual, recog.regimes, marketStateBuckets, profile, simulations, horizon);
       const paths=simResult.paths;
+      setAnalysisProgress(91,'Сбор сценариев','Группируем симуляции в два наиболее характерных будущих состояния');
       const clusters=clusterTwo(paths);
+      setAnalysisProgress(96,'Построение результата','Собираем объяснение, память рынка и свечное продолжение');
       const driverA=summarizeClusterDriver(clusters[0],simResult.simMeta,cohortStates);
       const driverB=summarizeClusterDriver(clusters[1],simResult.simMeta,cohortStates);
       const cascadeA=summarizeInteractionChain(clusters[0],simResult.simMeta);
@@ -2343,10 +2407,16 @@
       els.confidence.textContent=`уверенность ${(dataConfidence*100).toFixed(0)}%`;
       els.status.textContent=`готово · ${simulations.toLocaleString('ru-RU')} симуляций`;
       setSelectedModel(0); draw();
+      setAnalysisProgress(100,'Анализ завершён',simResult.invalidStepCount ? `Восстановлено некорректных шагов: ${simResult.invalidStepCount}` : 'Результат готов');
+      await new Promise(r=>setTimeout(r,180));
+      hideAnalysisOverlay();
     } catch(err){
       console.error(err);
       els.status.textContent="ошибка"; els.recognition.textContent="распознавание не удалось"; els.timeframeState.textContent="ТФ —";
       els.empty.classList.remove("hidden"); els.empty.textContent=err.message || "Ошибка анализа изображения.";
+      setAnalysisProgress(100,'Ошибка анализа',err.message || 'Не удалось завершить расчёт');
+      await new Promise(r=>setTimeout(r,900));
+      hideAnalysisOverlay();
     } finally { els.analyzeBtn.disabled=!files.length; }
   }
 

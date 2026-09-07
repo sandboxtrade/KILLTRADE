@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#090b0f" />
-  <title>Индикатор Лжи — Engine v1.8</title>
+  <title>Индикатор Лжи — Engine v1.8.2</title>
   <style>
     :root{
       --bg:#090b0f;
@@ -469,6 +469,23 @@
       .canvas-wrap,canvas{min-height:340px}
       .model-switch{flex-direction:column;align-items:flex-start}
     }
+
+    body.analysis-lock{overflow:hidden}
+    .analysis-overlay{
+      position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+      padding:24px;background:rgba(4,6,9,.88);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+      opacity:0;visibility:hidden;pointer-events:none;transition:opacity .18s ease,visibility .18s ease;
+    }
+    .analysis-overlay.visible{opacity:1;visibility:visible;pointer-events:auto}
+    .analysis-card{width:min(520px,100%);padding:24px;border:1px solid #242b36;border-radius:24px;background:#0b0e13;box-shadow:0 24px 80px rgba(0,0,0,.45)}
+    .analysis-kicker{font:800 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.14em;color:#778193;text-transform:uppercase}
+    .analysis-stage{margin-top:12px;font-size:18px;font-weight:750;letter-spacing:.01em;color:#f2f4f8}
+    .analysis-detail{min-height:38px;margin-top:8px;color:#8e97a6;font-size:12px;line-height:1.5}
+    .analysis-progress-row{display:flex;align-items:center;gap:14px;margin-top:18px}
+    .analysis-track{position:relative;flex:1;height:7px;border-radius:999px;background:#151a22;overflow:hidden;border:1px solid #202631}
+    .analysis-progress{height:100%;width:0;background:#eef1f6;border-radius:999px;transition:width .16s linear}
+    .analysis-percent{width:44px;text-align:right;font:800 12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#e7ebf2}
+    .analysis-foot{margin-top:12px;color:#606a79;font-size:10px;line-height:1.45}
   </style>
 </head>
 <body>
@@ -476,9 +493,9 @@
     <div class="topbar">
       <div class="brand">
         <h1>ИНДИКАТОР ЛЖИ</h1>
-        <p>v1.8: движок учитывает конкурирующие запасы давления — сколько потенциального предложения ещё осталось и сколько свободного капитала способно его принять. Важна не фигура на графике, а ресурс системы и то, какая сторона истощается раньше.</p>
+        <p>v1.8.2: исправлена ошибка NaN в симуляции и добавлен полноэкранный прогресс анализа. Движок по-прежнему строится на состоянии рынка и причинных переходах, а не на фигурах и паттернах.</p>
       </div>
-      <div class="badge">ENGINE v1.8</div>
+      <div class="badge">ENGINE v1.8.2</div>
     </div>
 
     <section class="grid">
@@ -656,6 +673,20 @@
       </section>
     </section>
   </main>
+
+
+  <div id="analysisOverlay" class="analysis-overlay" aria-live="polite" aria-modal="true" role="dialog">
+    <div class="analysis-card">
+      <div class="analysis-kicker">ИНДИКАТОР ЛЖИ · АНАЛИЗ</div>
+      <div id="analysisStage" class="analysis-stage">Подготовка анализа</div>
+      <div id="analysisDetail" class="analysis-detail">Подготавливаем входные данные</div>
+      <div class="analysis-progress-row">
+        <div class="analysis-track"><div id="analysisProgress" class="analysis-progress"></div></div>
+        <div id="analysisPercent" class="analysis-percent">0%</div>
+      </div>
+      <div class="analysis-foot">Во время моделирования интерфейс заблокирован, чтобы случайное действие не изменило входные данные до завершения расчёта.</div>
+    </div>
+  </div>
 
   <script src="./app.js"></script>
 </body>
