@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#090b0f" />
-  <title>Индикатор Лжи — Engine v1.0</title>
+  <title>Индикатор Лжи — Engine v1.8</title>
   <style>
     :root{
       --bg:#090b0f;
@@ -176,7 +176,9 @@
       letter-spacing:.04em;
     }
     .field input[type=range]{width:100%;accent-color:#f3f5f8}
-    .field select{
+    .slider-hint{margin-top:8px;color:#768091;font-size:11px;line-height:1.45}
+    .field select,
+    .field input[type=number]{
       width:100%;
       padding:10px 12px;
       border-radius:12px;
@@ -185,6 +187,7 @@
       color:var(--text);
       outline:none;
     }
+    .field input[type=number]::placeholder{color:#5f6877}
 
     .row{display:flex;gap:9px;flex-wrap:wrap}
     .btn{
@@ -418,6 +421,34 @@
     .p-wave.buy{color:#dbe4df}
     .p-wave.sell{color:#cbb4b8}
     .scenario-driver{margin-top:8px;color:#7f8999;font-size:10px;line-height:1.45}
+    .scenario-cascade{margin-top:6px;color:#aab2c1;font-size:10px;line-height:1.5;border-top:1px solid var(--line);padding-top:7px}
+    .transition-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding:0 2px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.10em}
+    .transition-strip{display:grid;grid-template-columns:1fr auto 1.15fr auto 1fr;gap:8px;align-items:stretch;margin-top:8px}
+    .transition-card{min-width:0;padding:11px 12px;border:1px solid var(--line);border-radius:13px;background:#0a0d12}
+    .transition-card small{display:block;margin-bottom:6px;color:#697283;font-size:8px;line-height:1;text-transform:uppercase;letter-spacing:.08em}
+    .transition-card b{display:block;color:#eef1f6;font-size:11px;line-height:1.45;font-weight:700}
+    .transition-card span{display:block;margin-top:5px;color:#8993a4;font-size:10px;line-height:1.45}
+    .transition-arrow{align-self:center;color:#626c7c;font:700 14px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
+    .scenario-transition{margin-top:7px;padding-top:7px;border-top:1px solid var(--line);color:#929cac;font-size:10px;line-height:1.5}
+    .memory-read{margin-top:10px;padding:12px 13px;border:1px solid var(--line);border-radius:14px;background:#0a0d12;color:#aab3c2;font-size:12px;line-height:1.55}
+    .memory-read b{color:#eef1f6;font-weight:700}
+    .scenario-memory{margin-top:7px;padding-top:7px;border-top:1px solid var(--line);color:#a3adbc;font-size:10px;line-height:1.5}
+    .reserve-read{margin-top:10px;padding:12px 13px;border:1px solid var(--line);border-radius:14px;background:#0a0d12}
+    .reserve-head{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#eef1f6;font-size:12px;font-weight:700}
+    .reserve-head span:last-child{color:#697283;font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.08em}
+    .reserve-bars{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+    .reserve-item{min-width:0}
+    .reserve-item-top{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#929cab;font-size:10px;line-height:1.2}
+    .reserve-item-top b{color:#e7ebf2;font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
+    .reserve-track{height:5px;margin-top:7px;border-radius:999px;background:#151a22;overflow:hidden}
+    .reserve-fill{height:100%;width:0;background:#b8c0cc;border-radius:999px;transition:width .18s ease}
+    .reserve-detail{margin-top:9px;color:#8993a4;font-size:10px;line-height:1.5}
+    .scenario-reserve{margin-top:7px;padding-top:7px;border-top:1px solid var(--line);color:#a3adbc;font-size:10px;line-height:1.5}
+    @media(max-width:560px){.reserve-bars{grid-template-columns:1fr}}
+    @media(max-width:680px){
+      .transition-strip{grid-template-columns:1fr}
+      .transition-arrow{display:none}
+    }
     @media(max-width:560px){
       .p-row{grid-template-columns:1.2fr .8fr .8fr 1fr}
       .p-capital{display:none}
@@ -445,9 +476,9 @@
     <div class="topbar">
       <div class="brand">
         <h1>ИНДИКАТОР ЛЖИ</h1>
-        <p>v1.0: движок моделирует не только режим рынка, но и состояние каждой группы участников — загрузку позиции, свободный капитал, модельный PnL и вероятность стать источником следующей волны. Визуал остаётся следствием поведения рынка, а не фигурой для теханализа.</p>
+        <p>v1.8: движок учитывает конкурирующие запасы давления — сколько потенциального предложения ещё осталось и сколько свободного капитала способно его принять. Важна не фигура на графике, а ресурс системы и то, какая сторона истощается раньше.</p>
       </div>
-      <div class="badge">ENGINE v1.0</div>
+      <div class="badge">ENGINE v1.8</div>
     </div>
 
     <section class="grid">
@@ -469,6 +500,7 @@
             <div class="field">
               <label><span>Число симуляций</span><b id="simValue">3000</b></label>
               <input id="simulations" type="range" min="500" max="10000" step="500" value="3000">
+              <div id="simExplain" class="slider-hint">3 000 — хороший баланс между скоростью и стабильностью результата.</div>
             </div>
 
             <div class="field">
@@ -477,11 +509,17 @@
             </div>
 
             <div class="field">
+              <label><span>Текущая цена</span><b id="priceModeLabel">относительная шкала</b></label>
+              <input id="currentPrice" type="number" inputmode="decimal" min="0" step="any" placeholder="Например: 66.65">
+              <div class="slider-hint">Если цена не указана, справа показывается изменение в % от последней свечи.</div>
+            </div>
+
+            <div class="field">
               <label><span>Профиль рынка</span></label>
               <select id="marketProfile">
-                <option value="lowcap">Low-cap meme $5–30M</option>
-                <option value="microcap">Micro-cap meme &lt;$5M</option>
-                <option value="midcap">Mid-cap meme $30–250M</option>
+                <option value="lowcap">Мемкоины · низкая капитализация $5–30M</option>
+                <option value="microcap">Мемкоины · микро-капитализация &lt;$5M</option>
+                <option value="midcap">Мемкоины · средняя капитализация $30–250M</option>
               </select>
             </div>
 
@@ -492,15 +530,15 @@
           </div>
 
           <p class="note">
-            Движок не ищет фигуры, уровни и прочие паттерны теханализа. График здесь трактуется как след участников рынка: давление спроса/предложения, стресс толпы, разгрузка и срыв ликвидности.
+            Движок не пытается определить, кто именно двигал рынок. График — это след уже произошедших действий. Ядро оценивает состояние капитала до события и вероятную реакцию рынка после него.
           </p>
 
           <div class="engine-mix">
             <div>
-              <div class="title">Engine mix</div>
-              <div class="mixline">PARTICIPANTS / BEHAVIOR&nbsp;&nbsp;95%</div>
+              <div class="title">Архитектура движка</div>
+              <div class="mixline">СОСТОЯНИЕ / РЕАКЦИЯ РЫНКА&nbsp;&nbsp;95%</div>
             </div>
-            <div class="ratio">LOCAL CONTINUITY 5%</div>
+            <div class="ratio">ЛОКАЛЬНАЯ НЕПРЕРЫВНОСТЬ 5%</div>
           </div>
         </div>
       </aside>
@@ -532,47 +570,84 @@
           <div class="statusbar">
             <span id="status" class="chip">ожидание</span>
             <span id="recognition" class="chip">распознавание —</span>
-            <span id="timeframeState" class="chip">TF —</span>
-            <span id="confidence" class="chip">confidence —</span>
+            <span id="timeframeState" class="chip">ТФ —</span>
+            <span id="confidence" class="chip">уверенность —</span>
           </div>
         </div>
 
         <div class="panel" style="margin-top:16px">
           <div class="panel-head">
-            <h2>Состояние движка</h2>
+            <h2>Состояние рынка</h2>
           </div>
           <div class="panel-body">
             <div class="metrics">
-              <div class="metric"><div class="k">Participant pressure</div><div id="mMomentum" class="v">—</div></div>
-              <div class="metric"><div class="k">Crowd stress</div><div id="mVol" class="v">—</div></div>
-              <div class="metric"><div class="k">Liquidity fragility</div><div id="mAccel" class="v">—</div></div>
-              <div class="metric"><div class="k">Distribution risk</div><div id="mDraw" class="v">—</div></div>
+              <div class="metric"><div class="k">Баланс реакции</div><div id="mMomentum" class="v">—</div></div>
+              <div class="metric"><div class="k">Стресс позиций</div><div id="mVol" class="v">—</div></div>
+              <div class="metric"><div class="k">Хрупкость ликвидности</div><div id="mAccel" class="v">—</div></div>
+              <div class="metric"><div class="k">Риск разгрузки</div><div id="mDraw" class="v">—</div></div>
             </div>
 
-            <div id="regimeRead" class="participant-read"><b>Поведенческий режим:</b> —</div>
-            <div id="participantRead" class="participant-read"><b>Участники:</b> —</div>
+            <div id="regimeRead" class="participant-read"><b>Режим реакции:</b> —</div>
+            <div id="marketStateRead" class="participant-read"><b>Состояние капитала:</b> —</div>
 
-            <div class="participant-map-head"><span>Modelled participant state</span><span>prior / visual inference</span></div>
-            <div id="participantMap" class="participant-map"></div>
+            <div id="cohortRead" class="participant-read"><b>Динамика состояний:</b> —</div>
+            <div id="interactionRead" class="participant-read"><b>Реакция рынка:</b> —</div>
+
+            <div class="transition-head"><span>Переход состояния</span><span>до → событие → после</span></div>
+            <div id="transitionGlobal" class="transition-strip">
+              <div class="transition-card"><small>До</small><b>—</b><span>—</span></div>
+              <div class="transition-arrow">→</div>
+              <div class="transition-card"><small>Событие</small><b>—</b><span>—</span></div>
+              <div class="transition-arrow">→</div>
+              <div class="transition-card"><small>После</small><b>—</b><span>—</span></div>
+            </div>
+
+            <div id="memoryRead" class="memory-read"><b>Память рынка:</b> —</div>
+
+            <div id="reserveRead" class="reserve-read">
+              <div class="reserve-head"><span>Запасы давления</span><span>модельный ресурс системы</span></div>
+              <div class="reserve-bars">
+                <div class="reserve-item">
+                  <div class="reserve-item-top"><span>Потенциальное предложение</span><b id="supplyReserveValue">—</b></div>
+                  <div class="reserve-track"><div id="supplyReserveBar" class="reserve-fill"></div></div>
+                </div>
+                <div class="reserve-item">
+                  <div class="reserve-item-top"><span>Принимающий капитал</span><b id="demandReserveValue">—</b></div>
+                  <div class="reserve-track"><div id="demandReserveBar" class="reserve-fill"></div></div>
+                </div>
+              </div>
+              <div id="reserveDetail" class="reserve-detail">—</div>
+            </div>
+
+            <div class="participant-map-head"><span>Модель состояния рынка</span><span>априорная визуальная оценка</span></div>
+            <div id="marketStateMap" class="participant-map"></div>
 
             <div class="scenarios">
               <div id="scenarioA" class="scenario active">
                 <div class="scenario-top">
-                  <span class="label">Model A</span>
+                  <span class="label">Модель A</span>
                   <span id="probA" class="prob">—</span>
                 </div>
                 <p id="descA">—</p>
-                <div id="driverA" class="scenario-driver">Источник следующей волны: —</div>
+                <div id="driverA" class="scenario-driver">Основной механизм: —</div>
+                <div id="cascadeA" class="scenario-cascade">Реакция рынка: —</div>
+                <div id="transitionA" class="scenario-transition">Переход состояния: —</div>
+                <div id="memoryA" class="scenario-memory">Память сценария: —</div>
+                <div id="reserveA" class="scenario-reserve">Запасы давления: —</div>
                 <div class="scenario-actions"><button id="focusA" class="mini-btn active a" type="button">Показать на графике</button></div>
               </div>
 
               <div id="scenarioB" class="scenario">
                 <div class="scenario-top">
-                  <span class="label">Model B</span>
+                  <span class="label">Модель B</span>
                   <span id="probB" class="prob">—</span>
                 </div>
                 <p id="descB">—</p>
-                <div id="driverB" class="scenario-driver">Источник следующей волны: —</div>
+                <div id="driverB" class="scenario-driver">Основной механизм: —</div>
+                <div id="cascadeB" class="scenario-cascade">Реакция рынка: —</div>
+                <div id="transitionB" class="scenario-transition">Переход состояния: —</div>
+                <div id="memoryB" class="scenario-memory">Память сценария: —</div>
+                <div id="reserveB" class="scenario-reserve">Запасы давления: —</div>
                 <div class="scenario-actions"><button id="focusB" class="mini-btn" type="button">Показать на графике</button></div>
               </div>
             </div>

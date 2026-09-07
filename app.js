@@ -35,10 +35,31 @@
     scenarioA: $("scenarioA"),
     scenarioB: $("scenarioB"),
     regimeRead: $("regimeRead"),
-    participantRead: $("participantRead"),
-    participantMap: $("participantMap"),
+    marketStateRead: $("marketStateRead"),
+    marketStateMap: $("marketStateMap"),
     driverA: $("driverA"),
-    driverB: $("driverB")
+    driverB: $("driverB"),
+    simExplain: $("simExplain"),
+    cohortRead: $("cohortRead"),
+    interactionRead: $("interactionRead"),
+    cascadeA: $("cascadeA"),
+    cascadeB: $("cascadeB"),
+    currentPrice: $("currentPrice"),
+    priceModeLabel: $("priceModeLabel"),
+    transitionGlobal: $("transitionGlobal"),
+    transitionA: $("transitionA"),
+    transitionB: $("transitionB"),
+    memoryRead: $("memoryRead"),
+    memoryA: $("memoryA"),
+    memoryB: $("memoryB"),
+    reserveRead: $("reserveRead"),
+    supplyReserveValue: $("supplyReserveValue"),
+    demandReserveValue: $("demandReserveValue"),
+    supplyReserveBar: $("supplyReserveBar"),
+    demandReserveBar: $("demandReserveBar"),
+    reserveDetail: $("reserveDetail"),
+    reserveA: $("reserveA"),
+    reserveB: $("reserveB")
   };
 
   const ctx = els.canvas.getContext("2d");
@@ -52,7 +73,7 @@
   const ENGINE_CONTINUITY_WEIGHT = 0.05;
 
   const TIMEFRAMES = [
-    { id: "auto", label: "Auto", rank: 0 },
+    { id: "auto", label: "авто", rank: 0 },
     { id: "m5", label: "5m", rank: 1 },
     { id: "m15", label: "15m", rank: 2 },
     { id: "h1", label: "1h", rank: 3 },
@@ -61,112 +82,168 @@
   ];
   const TF_META = Object.fromEntries(TIMEFRAMES.map(t => [t.id, t]));
 
-  const PARTICIPANT_PROFILES = {
+  const MARKET_STATE_PROFILES = {
     microcap: [
-      {name:"retail",       capital:.28, flow:.17, fomo:.92, panic:.93, profit:.48, aggression:.60},
-      {name:"activeRetail", capital:.16, flow:.24, fomo:.70, panic:.38, profit:.92, aggression:.92},
-      {name:"whales",       capital:.12, flow:.09, fomo:.12, panic:.12, profit:.74, aggression:.85},
-      {name:"insiders",     capital:.25, flow:.12, fomo:.04, panic:.03, profit:.90, aggression:.80},
-      {name:"snipers",      capital:.07, flow:.12, fomo:.45, panic:.18, profit:.98, aggression:1.00},
-      {name:"bots",         capital:.03, flow:.12, fomo:.15, panic:.10, profit:.58, aggression:1.00},
-      {name:"liquidity",    capital:.08, flow:.13, fomo:.02, panic:.02, profit:.10, aggression:.95},
-      {name:"pro",          capital:.01, flow:.01, fomo:.08, panic:.06, profit:.78, aggression:.70}
+      {name:"freshPositions",       capital:.28, flow:.17, fomo:.92, panic:.93, profit:.48, aggression:.60},
+      {name:"lossPositions", capital:.16, flow:.24, fomo:.70, panic:.38, profit:.92, aggression:.92},
+      {name:"profitablePositions",       capital:.12, flow:.09, fomo:.12, panic:.12, profit:.74, aggression:.85},
+      {name:"earlyProfitPositions",     capital:.25, flow:.12, fomo:.04, panic:.03, profit:.90, aggression:.80},
+      {name:"fastFlow",      capital:.07, flow:.12, fomo:.45, panic:.18, profit:.98, aggression:1.00},
+      {name:"mechanicalFlow",         capital:.03, flow:.12, fomo:.15, panic:.10, profit:.58, aggression:1.00},
+      {name:"liquidityBuffer",    capital:.08, flow:.13, fomo:.02, panic:.02, profit:.10, aggression:.95},
+      {name:"outsideCapital",          capital:.01, flow:.01, fomo:.08, panic:.06, profit:.78, aggression:.70}
     ],
     lowcap: [
-      {name:"retail",       capital:.30, flow:.17, fomo:.90, panic:.90, profit:.45, aggression:.50},
-      {name:"activeRetail", capital:.19, flow:.27, fomo:.65, panic:.30, profit:.95, aggression:.90},
-      {name:"whales",       capital:.13, flow:.10, fomo:.15, panic:.10, profit:.70, aggression:.80},
-      {name:"insiders",     capital:.20, flow:.09, fomo:.05, panic:.05, profit:.85, aggression:.70},
-      {name:"snipers",      capital:.05, flow:.10, fomo:.40, panic:.20, profit:.98, aggression:1.00},
-      {name:"bots",         capital:.04, flow:.12, fomo:.12, panic:.08, profit:.55, aggression:1.00},
-      {name:"liquidity",    capital:.07, flow:.13, fomo:.02, panic:.02, profit:.08, aggression:.95},
-      {name:"pro",          capital:.02, flow:.02, fomo:.08, panic:.06, profit:.75, aggression:.72}
+      {name:"freshPositions",       capital:.30, flow:.17, fomo:.90, panic:.90, profit:.45, aggression:.50},
+      {name:"lossPositions", capital:.19, flow:.27, fomo:.65, panic:.30, profit:.95, aggression:.90},
+      {name:"profitablePositions",       capital:.13, flow:.10, fomo:.15, panic:.10, profit:.70, aggression:.80},
+      {name:"earlyProfitPositions",     capital:.20, flow:.09, fomo:.05, panic:.05, profit:.85, aggression:.70},
+      {name:"fastFlow",      capital:.05, flow:.10, fomo:.40, panic:.20, profit:.98, aggression:1.00},
+      {name:"mechanicalFlow",         capital:.04, flow:.12, fomo:.12, panic:.08, profit:.55, aggression:1.00},
+      {name:"liquidityBuffer",    capital:.07, flow:.13, fomo:.02, panic:.02, profit:.08, aggression:.95},
+      {name:"outsideCapital",          capital:.02, flow:.02, fomo:.08, panic:.06, profit:.75, aggression:.72}
     ],
     midcap: [
-      {name:"retail",       capital:.34, flow:.20, fomo:.82, panic:.78, profit:.42, aggression:.45},
-      {name:"activeRetail", capital:.20, flow:.26, fomo:.60, panic:.28, profit:.90, aggression:.85},
-      {name:"whales",       capital:.15, flow:.12, fomo:.12, panic:.08, profit:.68, aggression:.74},
-      {name:"insiders",     capital:.12, flow:.07, fomo:.04, panic:.04, profit:.82, aggression:.60},
-      {name:"snipers",      capital:.03, flow:.06, fomo:.35, panic:.16, profit:.96, aggression:.95},
-      {name:"bots",         capital:.05, flow:.12, fomo:.10, panic:.06, profit:.52, aggression:.98},
-      {name:"liquidity",    capital:.08, flow:.14, fomo:.02, panic:.02, profit:.08, aggression:.90},
-      {name:"pro",          capital:.03, flow:.03, fomo:.07, panic:.05, profit:.72, aggression:.70}
+      {name:"freshPositions",       capital:.34, flow:.20, fomo:.82, panic:.78, profit:.42, aggression:.45},
+      {name:"lossPositions", capital:.20, flow:.26, fomo:.60, panic:.28, profit:.90, aggression:.85},
+      {name:"profitablePositions",       capital:.15, flow:.12, fomo:.12, panic:.08, profit:.68, aggression:.74},
+      {name:"earlyProfitPositions",     capital:.12, flow:.07, fomo:.04, panic:.04, profit:.82, aggression:.60},
+      {name:"fastFlow",      capital:.03, flow:.06, fomo:.35, panic:.16, profit:.96, aggression:.95},
+      {name:"mechanicalFlow",         capital:.05, flow:.12, fomo:.10, panic:.06, profit:.52, aggression:.98},
+      {name:"liquidityBuffer",    capital:.08, flow:.14, fomo:.02, panic:.02, profit:.08, aggression:.90},
+      {name:"outsideCapital",          capital:.03, flow:.03, fomo:.07, panic:.05, profit:.72, aggression:.70}
     ]
   };
 
 
   const BEHAVIOR_REGIMES = {
     accumulation: {
-      label: "Скрытое накопление",
-      buy: { whales:.55, pro:.48, insiders:.18, activeRetail:.12, liquidity:.22 },
-      sell: { retail:-.08, whales:-.10, pro:-.12 },
-      liquidity: 1.06,
+      label: "Преобладание поглощения",
+      buy: { profitablePositions:.55, outsideCapital:.48, earlyProfitPositions:.18, lossPositions:.12, liquidityBuffer:.22 },
+      sell: { freshPositions:-.08, profitablePositions:-.10, outsideCapital:-.12 },
+      liquidityBuffer: 1.06,
       attention: -0.02
     },
     fomo_chase: {
-      label: "FOMO-погоня",
-      buy: { retail:.78, activeRetail:.58, snipers:.48, bots:.34, pro:.10 },
-      sell: { whales:.20, insiders:.34, pro:.16 },
-      liquidity: .94,
+      label: "Реактивное усиление спроса",
+      buy: { freshPositions:.78, lossPositions:.58, fastFlow:.48, mechanicalFlow:.34, outsideCapital:.10 },
+      sell: { profitablePositions:.20, earlyProfitPositions:.34, outsideCapital:.16 },
+      liquidityBuffer: .94,
       attention: .08
     },
     distribution: {
-      label: "Разгрузка в спрос",
-      buy: { retail:.42, activeRetail:.20, bots:.10 },
-      sell: { insiders:.82, whales:.68, pro:.34, snipers:.20 },
-      liquidity: .91,
+      label: "Фиксация прибыльных позиций",
+      buy: { freshPositions:.42, lossPositions:.20, mechanicalFlow:.10 },
+      sell: { earlyProfitPositions:.82, profitablePositions:.68, outsideCapital:.34, fastFlow:.20 },
+      liquidityBuffer: .91,
       attention: .03
     },
     panic_exit: {
-      label: "Панический выход",
-      buy: { liquidity:.26, pro:.12 },
-      sell: { retail:.92, activeRetail:.64, snipers:.44, whales:.30, bots:.28 },
-      liquidity: .78,
+      label: "Ускорение выхода",
+      buy: { liquidityBuffer:.26, outsideCapital:.12 },
+      sell: { freshPositions:.92, lossPositions:.64, fastFlow:.44, profitablePositions:.30, mechanicalFlow:.28 },
+      liquidityBuffer: .78,
       attention: .10
     },
     absorption: {
       label: "Поглощение предложения",
-      buy: { liquidity:.72, whales:.36, pro:.42, activeRetail:.18 },
-      sell: { retail:.18, insiders:.16 },
-      liquidity: 1.12,
+      buy: { liquidityBuffer:.72, profitablePositions:.36, outsideCapital:.42, lossPositions:.18 },
+      sell: { freshPositions:.18, earlyProfitPositions:.16 },
+      liquidityBuffer: 1.12,
       attention: -.03
     },
     liquidity_vacuum: {
       label: "Дефицит ликвидности",
-      buy: { activeRetail:.34, snipers:.42, bots:.48 },
-      sell: { activeRetail:.34, snipers:.42, bots:.48 },
-      liquidity: .66,
+      buy: { lossPositions:.34, fastFlow:.42, mechanicalFlow:.48 },
+      sell: { lossPositions:.34, fastFlow:.42, mechanicalFlow:.48 },
+      liquidityBuffer: .66,
       attention: .12
     },
     balance: {
-      label: "Баланс потоков",
-      buy: { liquidity:.10, pro:.06 },
-      sell: { liquidity:.10, pro:.06 },
-      liquidity: 1.02,
+      label: "Баланс реакций",
+      buy: { liquidityBuffer:.10, outsideCapital:.06 },
+      sell: { liquidityBuffer:.10, outsideCapital:.06 },
+      liquidityBuffer: 1.02,
       attention: -.04
     }
   };
 
-  const PARTICIPANT_LABELS = {
-    retail: "retail",
-    activeRetail: "active retail",
-    whales: "whales",
-    insiders: "insiders",
-    snipers: "snipers",
-    bots: "bots",
-    liquidity: "liquidity providers",
-    pro: "pro capital"
+  const MARKET_STATE_LABELS = {
+    freshPositions: "свежие позиции",
+    lossPositions: "убыточные позиции",
+    profitablePositions: "прибыльные позиции",
+    earlyProfitPositions: "ранние прибыльные позиции",
+    fastFlow: "быстрый реактивный поток",
+    mechanicalFlow: "механический поток",
+    liquidityBuffer: "запас ликвидности",
+    outsideCapital: "свободный капитал"
   };
 
-  const ROLE_STATE_PRIORS = {
-    retail:       {load:.58, pnl:.01},
-    activeRetail: {load:.52, pnl:.03},
-    whales:       {load:.62, pnl:.14},
-    insiders:     {load:.72, pnl:.34},
-    snipers:      {load:.44, pnl:.07},
-    bots:         {load:.36, pnl:.02},
-    liquidity:    {load:.50, pnl:.00},
-    pro:          {load:.56, pnl:.10}
+  const MARKET_STATE_PRIORS = {
+    freshPositions:       {load:.56, pnl:.01},
+    lossPositions:        {load:.66, pnl:-.12},
+    profitablePositions:  {load:.68, pnl:.18},
+    earlyProfitPositions: {load:.78, pnl:.46},
+    fastFlow:             {load:.38, pnl:.04},
+    mechanicalFlow:       {load:.34, pnl:.00},
+    liquidityBuffer:      {load:.32, pnl:.00},
+    outsideCapital:       {load:.18, pnl:.02}
+  };
+
+  // Когорты — не технические паттерны. Это слои капитала с разным временем входа и разной чувствительностью к прибыли/убытку.
+  // Они по-разному реагируют на прибыль, убыток, истощение капитала и смену режима рынка.
+  const COHORT_BEHAVIOR = {
+    early: {label:'ранние входы', takeProfit:1.10, panic:.34, chase:.18, patience:.82, reentry:.28},
+    core:  {label:'базовый слой', takeProfit:.72, panic:.56, chase:.42, patience:.58, reentry:.42},
+    late:  {label:'поздние входы', takeProfit:.38, panic:1.08, chase:.88, patience:.26, reentry:.56}
+  };
+
+
+
+  // Взаимодействие состояний рынка. Это причинная модель того, как один поток меняет реакцию другого состояния капитала,
+  // а не технический анализ графика. Коэффициенты — априорные и позже будут калиброваться на истории и внешних данных.
+  const INTERACTION_RULES = [
+    {source:'earlyProfitPositions', target:'lossPositions', buy:.22, sell:.62},
+    {source:'earlyProfitPositions', target:'freshPositions',       buy:.16, sell:.44},
+    {source:'earlyProfitPositions', target:'mechanicalFlow',         buy:.18, sell:.38},
+    {source:'earlyProfitPositions', target:'fastFlow',      buy:.10, sell:.28},
+
+    {source:'profitablePositions', target:'lossPositions',   buy:.30, sell:.42},
+    {source:'profitablePositions', target:'freshPositions',         buy:.24, sell:.34},
+    {source:'profitablePositions', target:'mechanicalFlow',           buy:.25, sell:.32},
+    {source:'profitablePositions', target:'fastFlow',        buy:.18, sell:.30},
+
+    {source:'lossPositions', target:'freshPositions',   buy:.36, sell:.40},
+    {source:'lossPositions', target:'mechanicalFlow',     buy:.32, sell:.36},
+    {source:'lossPositions', target:'fastFlow',  buy:.28, sell:.38},
+
+    {source:'freshPositions', target:'lossPositions',   buy:.10, sell:.18},
+    {source:'freshPositions', target:'mechanicalFlow',           buy:.14, sell:.20},
+    // Сильный розничный спрос может становиться ликвидностью для фиксации ранних держателей.
+    {source:'freshPositions', target:'earlyProfitPositions',       buy:-.22, sell:-.04},
+    {source:'freshPositions', target:'profitablePositions',         buy:-.12, sell:-.03},
+    {source:'lossPositions', target:'earlyProfitPositions', buy:-.18, sell:-.02},
+
+    {source:'mechanicalFlow', target:'freshPositions',           buy:.08, sell:.12},
+    {source:'mechanicalFlow', target:'lossPositions',     buy:.12, sell:.14},
+
+    {source:'outsideCapital', target:'profitablePositions',            buy:.22, sell:.22},
+    {source:'outsideCapital', target:'lossPositions',      buy:.18, sell:.20},
+
+    // Поставщики ликвидности чаще контрят поток, но при сильном стрессе не обязаны его поглощать.
+    {source:'freshPositions', target:'liquidityBuffer',      buy:-.06, sell:-.10},
+    {source:'lossPositions', target:'liquidityBuffer',buy:-.08, sell:-.14}
+  ];
+
+  const STATE_REACTION_SENSITIVITY = {
+    freshPositions:1.00,
+    lossPositions:.88,
+    profitablePositions:.48,
+    earlyProfitPositions:.28,
+    fastFlow:.96,
+    mechanicalFlow:1.02,
+    liquidityBuffer:.58,
+    outsideCapital:.46
   };
 
   const COLORS = {
@@ -475,7 +552,7 @@
     const reflexivity=clamp(Math.abs(momentum)*.28 + Math.abs(accel)*.22 + vol*.18 + persistence*.22, 0, 1);
     const capitulationRisk=clamp(drawdown*.46 + Math.max(0,-momentum)*.24 + Math.max(0,-accel)*.16 + vol*.18, 0, 1);
     const absorption=clamp((1-clamp(vol,0,1))*.16 + persistence*.28 + compression*.28 + Math.max(0,pressureBias)*.12, 0, 1);
-    const liquidityFragility=clamp(crowdStress*.34 + reflexivity*.28 + (1-absorption)*.24 + (1-compression)*.14, 0, 1);
+    const liquidityBufferFragility=clamp(crowdStress*.34 + reflexivity*.28 + (1-absorption)*.24 + (1-compression)*.14, 0, 1);
     const distributionRisk=clamp(Math.max(0,momentum)*.18 + Math.max(0,-accel)*.24 + crowdStress*.20 + drawdown*.18 + reflexivity*.20, 0, 1);
 
     // The only 5% "technical" component: short-lived directional continuity.
@@ -494,7 +571,7 @@
       reflexivity,
       capitulationRisk,
       absorption,
-      liquidityFragility,
+      liquidityBufferFragility,
       distributionRisk,
       continuityTrace
     };
@@ -515,7 +592,7 @@
       reflexivity: clamp((s.reflexivity*.50)+(m.reflexivity*.30)+(l.reflexivity*.20), 0, 1),
       capitulationRisk: clamp((s.capitulationRisk*.25)+(m.capitulationRisk*.35)+(l.capitulationRisk*.40), 0, 1),
       absorption: clamp((s.absorption*.45)+(m.absorption*.30)+(l.absorption*.25), 0, 1),
-      liquidityFragility: clamp((s.liquidityFragility*.45)+(m.liquidityFragility*.30)+(l.liquidityFragility*.25), 0, 1),
+      liquidityBufferFragility: clamp((s.liquidityBufferFragility*.45)+(m.liquidityBufferFragility*.30)+(l.liquidityBufferFragility*.25), 0, 1),
       distributionRisk: clamp((s.distributionRisk*.30)+(m.distributionRisk*.35)+(l.distributionRisk*.35), 0, 1),
       continuityTrace: clamp((s.continuityTrace*.70)+(m.continuityTrace*.22)+(l.continuityTrace*.08), -1, 1)
     };
@@ -550,7 +627,7 @@
         1.24*Math.max(0,-v.pressureBias) +
         .92*v.crowdStress +
         .92*v.capitulationRisk +
-        .26*v.liquidityFragility,
+        .26*v.liquidityBufferFragility,
       absorption:
         .20 +
         1.18*v.absorption +
@@ -559,7 +636,7 @@
         .22*v.drawdown,
       liquidity_vacuum:
         .12 +
-        1.18*v.liquidityFragility +
+        1.18*v.liquidityBufferFragility +
         .70*v.crowdStress +
         .42*Math.abs(v.pressureBias) +
         .30*(1-v.absorption),
@@ -589,14 +666,14 @@
     return regimes[regimes.length-1]?.id || 'balance';
   }
 
-  function regimeSideBoost(regimeId, participantName, side){
+  function regimeSideBoost(regimeId, stateName, side){
     const regime=BEHAVIOR_REGIMES[regimeId] || BEHAVIOR_REGIMES.balance;
     const table=side==='buy' ? regime.buy : regime.sell;
-    return table[participantName] || 0;
+    return table[stateName] || 0;
   }
 
-  function weightedRegimeBoost(regimes, participantName, side){
-    return (regimes||[]).reduce((sum,r)=>sum + r.prob*regimeSideBoost(r.id,participantName,side),0);
+  function weightedRegimeBoost(regimes, stateName, side){
+    return (regimes||[]).reduce((sum,r)=>sum + r.prob*regimeSideBoost(r.id,stateName,side),0);
   }
 
   function regimeProbMap(regimes){
@@ -605,33 +682,33 @@
     return out;
   }
 
-  function buildParticipantStates(profileName, visual, regimes){
-    const profile=PARTICIPANT_PROFILES[profileName] || PARTICIPANT_PROFILES.lowcap;
+  function buildMarketStateBuckets(profileName, visual, regimes){
+    const profile=MARKET_STATE_PROFILES[profileName] || MARKET_STATE_PROFILES.lowcap;
     const rp=regimeProbMap(regimes);
     const fomo=rp.fomo_chase||0, dist=rp.distribution||0, panic=rp.panic_exit||0;
     const accum=rp.accumulation||0, absorb=rp.absorption||0, vacuum=rp.liquidity_vacuum||0;
 
     return profile.map(p=>{
-      const prior=ROLE_STATE_PRIORS[p.name] || {load:.5,pnl:0};
-      const isRetail=p.name==='retail', isActive=p.name==='activeRetail', isWhale=p.name==='whales';
-      const isInsider=p.name==='insiders', isSniper=p.name==='snipers', isBot=p.name==='bots';
-      const isLP=p.name==='liquidity', isPro=p.name==='pro';
+      const prior=MARKET_STATE_PRIORS[p.name] || {load:.5,pnl:0};
+      const isFresh=p.name==='freshPositions', isLoss=p.name==='lossPositions', isProfitable=p.name==='profitablePositions';
+      const isEarlyProfit=p.name==='earlyProfitPositions', isFast=p.name==='fastFlow', isMechanical=p.name==='mechanicalFlow';
+      const isLiquidity=p.name==='liquidityBuffer', isOutside=p.name==='outsideCapital';
 
       let load=prior.load;
-      load += fomo*((isRetail?.18:0)+(isActive?.14:0)+(isSniper?.10:0));
-      load += dist*((isInsider?.14:0)+(isWhale?.10:0)+(isPro?.05:0));
-      load += accum*((isWhale?.08:0)+(isPro?.07:0)+(isInsider?.03:0));
-      load += panic*((isRetail?.06:0)+(isActive?.04:0));
-      load -= absorb*((isRetail?.05:0)+(isSniper?.04:0));
+      load += fomo*((isFresh?.18:0)+(isLoss?.14:0)+(isFast?.10:0));
+      load += dist*((isEarlyProfit?.14:0)+(isProfitable?.10:0)+(isOutside?.05:0));
+      load += accum*((isProfitable?.08:0)+(isOutside?.07:0)+(isEarlyProfit?.03:0));
+      load += panic*((isFresh?.06:0)+(isLoss?.04:0));
+      load -= absorb*((isFresh?.05:0)+(isFast?.04:0));
       load=clamp(load,.12,.92);
 
       let pnl=prior.pnl;
-      pnl += fomo*((isInsider?.26:0)+(isWhale?.17:0)+(isPro?.12:0)+(isRetail?.03:0));
-      pnl += dist*((isInsider?.34:0)+(isWhale?.22:0)+(isPro?.14:0)+(isRetail?.02:0));
-      pnl += accum*((isWhale?.08:0)+(isPro?.07:0)+(isInsider?.06:0));
-      pnl -= panic*((isRetail?.24:0)+(isActive?.17:0)+(isSniper?.10:0)+(isBot?.05:0));
-      pnl -= vacuum*((isRetail?.08:0)+(isActive?.06:0));
-      pnl += visual.pressureBias*((isRetail?.04:0)+(isActive?.05:0)+(isWhale?.03:0));
+      pnl += fomo*((isEarlyProfit?.26:0)+(isProfitable?.17:0)+(isOutside?.12:0)+(isFresh?.03:0));
+      pnl += dist*((isEarlyProfit?.34:0)+(isProfitable?.22:0)+(isOutside?.14:0)+(isFresh?.02:0));
+      pnl += accum*((isProfitable?.08:0)+(isOutside?.07:0)+(isEarlyProfit?.06:0));
+      pnl -= panic*((isFresh?.24:0)+(isLoss?.17:0)+(isFast?.10:0)+(isMechanical?.05:0));
+      pnl -= vacuum*((isFresh?.08:0)+(isLoss?.06:0));
+      pnl += visual.pressureBias*((isFresh?.04:0)+(isLoss?.05:0)+(isProfitable?.03:0));
       pnl=clamp(pnl,-.45,1.60);
 
       const buyReg=weightedRegimeBoost(regimes,p.name,'buy');
@@ -667,7 +744,7 @@
 
       return {
         name:p.name,
-        label:PARTICIPANT_LABELS[p.name]||p.name,
+        label:MARKET_STATE_LABELS[p.name]||p.name,
         capitalShare:p.capital,
         flowShare:p.flow,
         positionLoad:load,
@@ -688,17 +765,17 @@
     return `${n>0?'+':''}${n.toFixed(0)}%`;
   }
 
-  function renderParticipantMap(states){
-    if(!els.participantMap) return;
-    if(!states?.length){ els.participantMap.innerHTML=''; return; }
-    els.participantMap.innerHTML=states.map(s=>{
+  function renderMarketStateMap(states){
+    if(!els.marketStateMap) return;
+    if(!states?.length){ els.marketStateMap.innerHTML=''; return; }
+    els.marketStateMap.innerHTML=states.map(s=>{
       const waveClass=s.waveSide==='BUY'?'buy':'sell';
       return `<div class="p-row">
         <div class="p-name">${s.label}</div>
-        <div class="p-cell p-capital"><small>capital</small>${(s.capitalShare*100).toFixed(0)}%</div>
-        <div class="p-cell"><small>loaded</small>${(s.positionLoad*100).toFixed(0)}%</div>
-        <div class="p-cell"><small>uPnL</small>${formatSignedPct(s.pnl)}</div>
-        <div class="p-cell p-wave ${waveClass}"><small>next wave</small>${s.waveSide} ${(s.wavePotential*100).toFixed(1)}</div>
+        <div class="p-cell p-capital"><small>капитал</small>${(s.capitalShare*100).toFixed(0)}%</div>
+        <div class="p-cell"><small>загрузка</small>${(s.positionLoad*100).toFixed(0)}%</div>
+        <div class="p-cell"><small>результат</small>${formatSignedPct(s.pnl)}</div>
+        <div class="p-cell p-wave ${waveClass}"><small>след. волна</small>${s.waveSide==='BUY'?'ПОКУПКА':'ПРОДАЖА'} ${(s.wavePotential*100).toFixed(1)}</div>
       </div>`;
     }).join('');
   }
@@ -739,15 +816,128 @@
     return top.map(r=>`${r.label} ${(r.prob*100).toFixed(0)}%`).join(' · ');
   }
 
-  function formatParticipantRead(flowSummary){
+  function formatMarketStateRead(flowSummary){
     const entries=Object.entries(flowSummary||{});
     if(!entries.length) return '—';
     entries.sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
     const buyers=entries.filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).slice(0,2);
     const sellers=entries.filter(([,v])=>v<0).sort((a,b)=>a[1]-b[1]).slice(0,2);
-    const buyText=buyers.length ? buyers.map(([k])=>PARTICIPANT_LABELS[k]||k).join(', ') : 'нет явного лидера';
-    const sellText=sellers.length ? sellers.map(([k])=>PARTICIPANT_LABELS[k]||k).join(', ') : 'нет явного лидера';
+    const buyText=buyers.length ? buyers.map(([k])=>MARKET_STATE_LABELS[k]||k).join(', ') : 'нет явного лидера';
+    const sellText=sellers.length ? sellers.map(([k])=>MARKET_STATE_LABELS[k]||k).join(', ') : 'нет явного лидера';
     return `спрос: ${buyText}; предложение: ${sellText}`;
+  }
+
+  function explainSimulationCount(value){
+    if(value <= 1500) return 'Меньше симуляций: быстрее расчёт, но вероятности грубее и сценарии шумнее.';
+    if(value <= 4000) return '3 000 — хороший баланс между скоростью и стабильностью результата.';
+    if(value <= 7000) return 'Больше симуляций: вероятности стабильнее, но расчёт заметно дольше.';
+    return '10 000 — максимально устойчивое усреднение для этой версии, но анализ будет самым медленным.';
+  }
+
+  function updateSimulationHint(){
+    if(els.simExplain) els.simExplain.textContent = explainSimulationCount(Number(els.simulations.value || 3000));
+  }
+
+  function getCurrentPrice(){
+    const v=Number(els.currentPrice?.value);
+    return Number.isFinite(v) && v>0 ? v : null;
+  }
+
+  function updatePriceMode(){
+    const price=getCurrentPrice();
+    if(els.priceModeLabel) els.priceModeLabel.textContent = price ? `реальная шкала · ${formatPrice(price)}` : 'относительная шкала';
+    if(lastResult) draw();
+  }
+
+  function formatPrice(value){
+    const v=Math.abs(value);
+    if(v>=1000) return value.toLocaleString('ru-RU',{maximumFractionDigits:2});
+    if(v>=100) return value.toFixed(2);
+    if(v>=1) return value.toFixed(3).replace(/0+$/,'').replace(/\.$/,'');
+    if(v>=0.01) return value.toFixed(4).replace(/0+$/,'').replace(/\.$/,'');
+    return value.toPrecision(5);
+  }
+
+  function buildStateCohorts(states, regimes, visual){
+    const rp=regimeProbMap(regimes);
+    const defs=[
+      {id:'early', label:'ранние входы', weight:.28, pnlShift:.24, loadShift:.08},
+      {id:'core', label:'базовый слой', weight:.44, pnlShift:.03, loadShift:0},
+      {id:'late', label:'поздние входы', weight:.28, pnlShift:-.18, loadShift:-.06}
+    ];
+    const out=[];
+    for(const s of states||[]){
+      for(const d of defs){
+        let load=clamp(s.positionLoad + d.loadShift + (d.id==='late' ? (rp.fomo_chase||0)*.08 : 0) - (d.id==='early' ? (rp.distribution||0)*.03 : 0), .06, .96);
+        let pnl=s.pnl + d.pnlShift;
+        pnl += (d.id==='early' ? (rp.distribution||0)*.18 + (rp.fomo_chase||0)*.08 : 0);
+        pnl += (d.id==='late' ? -(rp.panic_exit||0)*.18 - (rp.liquidity_vacuum||0)*.08 : 0);
+        pnl += (d.id==='core' ? (visual.pressureBias*.06) : 0);
+        pnl=clamp(pnl,-.65,1.95);
+
+        const buyPressure=clamp(sigmoid(-1.08 + (1-load)*1.05 + Math.max(0,visual.pressureBias)*.58 + visual.absorption*.24 - Math.max(0,pnl)*.25),0,1);
+        const sellPressure=clamp(sigmoid(-1.02 + load*.68 + Math.max(0,pnl)*1.05 + visual.distributionRisk*.42 + visual.crowdStress*.22 + (d.id==='late' && pnl<0 ? .20 : 0)),0,1);
+        const side=buyPressure>=sellPressure ? 'BUY' : 'SELL';
+        const potential=Math.max(buyPressure,sellPressure) * d.weight * s.capitalShare;
+        out.push({
+          stateId:s.name,
+          stateLabel:s.label,
+          cohortId:d.id,
+          cohortLabel:d.label,
+          weight:d.weight,
+          load,
+          pnl,
+          buyPressure,
+          sellPressure,
+          side,
+          potential
+        });
+      }
+    }
+    return out.sort((a,b)=>b.potential-a.potential);
+  }
+
+  function mergeStateCohorts(states, cohorts){
+    const by={};
+    for(const c of cohorts||[]){
+      (by[c.stateId] ||= []).push(c);
+    }
+    return (states||[]).map(s=>{
+      const arr=by[s.name] || [];
+      if(!arr.length) return s;
+      const w=Math.max(1e-6, arr.reduce((sum,c)=>sum+c.weight,0));
+      const buy=arr.reduce((sum,c)=>sum+c.buyPressure*c.weight,0)/w;
+      const sell=arr.reduce((sum,c)=>sum+c.sellPressure*c.weight,0)/w;
+      const pnl=arr.reduce((sum,c)=>sum+c.pnl*c.weight,0)/w;
+      const load=arr.reduce((sum,c)=>sum+c.load*c.weight,0)/w;
+      const buyUrgency=clamp(s.buyUrgency*.72 + buy*.28,0,1);
+      const sellUrgency=clamp(s.sellUrgency*.72 + sell*.28,0,1);
+      const buyWave=s.capitalShare*(1-load)*buyUrgency;
+      const sellWave=s.capitalShare*load*sellUrgency;
+      return {
+        ...s,
+        pnl,
+        positionLoad:load,
+        cashRatio:1-load,
+        buyUrgency,
+        sellUrgency,
+        waveSide: buyWave>=sellWave ? 'BUY' : 'SELL',
+        wavePotential: Math.max(buyWave,sellWave),
+        cohorts: arr
+      };
+    }).sort((a,b)=>b.wavePotential-a.wavePotential);
+  }
+
+  function formatCohortRead(cohorts){
+    if(!cohorts?.length) return '—';
+    const buyers=cohorts.filter(c=>c.side==='BUY').sort((a,b)=>b.potential-a.potential);
+    const sellers=cohorts.filter(c=>c.side==='SELL').sort((a,b)=>b.potential-a.potential);
+    const trapped=[...cohorts].sort((a,b)=>(b.load*Math.max(0,-b.pnl))-(a.load*Math.max(0,-a.pnl)))[0];
+    const parts=[];
+    if(sellers[0]) parts.push(`${sellers[0].stateLabel}: ${sellers[0].cohortLabel} чаще даёт разгрузку`);
+    if(buyers[0]) parts.push(`${buyers[0].stateLabel}: ${buyers[0].cohortLabel} чаще поддерживает спрос`);
+    if(trapped && trapped.pnl < -0.03) parts.push(`наибольший риск паники у ${trapped.stateLabel}: ${trapped.cohortLabel} ${formatSignedPct(trapped.pnl)}`);
+    return parts.join('; ') + '.';
   }
 
   async function recognizeAll(fileItems){
@@ -780,7 +970,7 @@
       displayCandles = pathToCandles(displayPath.map(v=>1+v*0.3), 42, 0.9).map(c=>( { o:c.o-1, h:c.h-1, l:c.l-1, c:c.c-1 }));
     }
 
-    const tfSummary = [shortBest && `short:${shortBest.tfLabel}`, midBest && `mid:${midBest.tfLabel}`, longBest && `long:${longBest.tfLabel}`].filter(Boolean).join(' · ');
+    const tfSummary = [shortBest && `короткий:${shortBest.tfLabel}`, midBest && `средний:${midBest.tfLabel}`, longBest && `длинный:${longBest.tfLabel}`].filter(Boolean).join(' · ');
     const confidence = mean(extracted.map(e=>e.confidence));
     const candleScore = mean(extracted.map(e=>e.candleConfidence));
     const regimes = inferBehaviorRegimes(visual);
@@ -788,9 +978,164 @@
     return { extracted, visual, regimes, confidence, candleScore, displayBase, displayCandles, tfSummary };
   }
 
-  function initMarket(profileName, visual, regimes, participantStates){
-    const base=PARTICIPANT_PROFILES[profileName].map(p=>({...p}));
-    const stateBy=Object.fromEntries((participantStates||[]).map(s=>[s.name,s]));
+  function createMarketMemory(){
+    return {
+      absorptionConfidence:0,
+      absorptionFatigue:0,
+      sellPersistence:0,
+      buyPersistence:0,
+      failedDemand:0,
+      capitalDepletion:0,
+      liquidityFatigue:0,
+      stressMemory:0,
+      consecutiveSell:0,
+      consecutiveBuy:0,
+      absorptionCount:0,
+      failedAbsorptionCount:0,
+      demandFailureCount:0,
+      eventCounts:{},
+      recentEvents:[]
+    };
+  }
+
+  function decayMarketMemory(memory){
+    memory.absorptionConfidence*=.965;
+    memory.absorptionFatigue*=.978;
+    memory.sellPersistence*=.958;
+    memory.buyPersistence*=.958;
+    memory.failedDemand*=.972;
+    memory.capitalDepletion*=.985;
+    memory.liquidityFatigue*=.978;
+    memory.stressMemory*=.970;
+  }
+
+  function updateMarketMemory(m,before,after,stepResult,transition){
+    const memory=m.memory || (m.memory=createMarketMemory());
+    decayMarketMemory(memory);
+
+    const net=stepResult.netFlow||0;
+    const gross=Math.max(1e-6,stepResult.grossFlow||0);
+    const ret=stepResult.ret||0;
+    const imbalance=Math.abs(net)/gross;
+    const event=transition?.event || 'neutral_shift';
+    memory.eventCounts[event]=(memory.eventCounts[event]||0)+1;
+    memory.recentEvents.push(event);
+    if(memory.recentEvents.length>8) memory.recentEvents.shift();
+
+    if(net<0){
+      memory.consecutiveSell+=1;
+      memory.consecutiveBuy=0;
+      if(ret<-.005){
+        memory.sellPersistence=clamp(memory.sellPersistence+.10+.04*Math.min(3,memory.consecutiveSell),0,1);
+        memory.stressMemory=clamp(memory.stressMemory+.07,0,1);
+      } else if(imbalance>.28 && Math.abs(ret)<.0038){
+        memory.absorptionConfidence=clamp(memory.absorptionConfidence+.13,0,1);
+        memory.absorptionCount+=1;
+      }
+    } else if(net>0){
+      memory.consecutiveBuy+=1;
+      memory.consecutiveSell=0;
+      if(ret>.005){
+        memory.buyPersistence=clamp(memory.buyPersistence+.10+.04*Math.min(3,memory.consecutiveBuy),0,1);
+      } else if(imbalance>.28 && Math.abs(ret)<.0038){
+        memory.failedDemand=clamp(memory.failedDemand+.12,0,1);
+        memory.demandFailureCount+=1;
+      }
+    } else {
+      memory.consecutiveBuy=Math.max(0,memory.consecutiveBuy-1);
+      memory.consecutiveSell=Math.max(0,memory.consecutiveSell-1);
+    }
+
+    if(event==='absorption'){
+      memory.absorptionConfidence=clamp(memory.absorptionConfidence+.16,0,1);
+      memory.absorptionCount+=1;
+    }
+    if(event==='liquidity_depletion'){
+      memory.liquidityFatigue=clamp(memory.liquidityFatigue+.17,0,1);
+      if(memory.absorptionConfidence>.25){
+        memory.absorptionFatigue=clamp(memory.absorptionFatigue+.12,0,1);
+        memory.failedAbsorptionCount+=1;
+      }
+    }
+    if(event==='loss_activation') memory.stressMemory=clamp(memory.stressMemory+.14,0,1);
+    if(event==='demand_reserve_depletion'){ memory.capitalDepletion=clamp(memory.capitalDepletion+.12,0,1); memory.liquidityFatigue=clamp(memory.liquidityFatigue+.045,0,1); }
+    if(event==='supply_reserve_depletion'){ memory.sellPersistence=clamp(memory.sellPersistence-.045,0,1); memory.buyPersistence=clamp(memory.buyPersistence+.035,0,1); }
+    if(event==='profit_release') memory.sellPersistence=clamp(memory.sellPersistence+.10,0,1);
+    if(event==='capital_activation'){
+      const spent=Math.max(0,(before?.cashShare||0)-(after?.cashShare||0));
+      memory.capitalDepletion=clamp(memory.capitalDepletion+.08+spent*.95,0,1);
+    }
+
+    const cashDrop=Math.max(0,(before?.cashShare||0)-(after?.cashShare||0));
+    if(cashDrop>.012) memory.capitalDepletion=clamp(memory.capitalDepletion+cashDrop*.55,0,1);
+    else if((after?.cashShare||0)>(before?.cashShare||0)+.012) memory.capitalDepletion=clamp(memory.capitalDepletion-.025,0,1);
+
+    if((after?.liquidity||0)<(before?.liquidity||0)-.025){
+      memory.liquidityFatigue=clamp(memory.liquidityFatigue+.06,0,1);
+    }
+
+    // Повторное успешное поглощение расходует ресурс. Поэтому память о поглощении
+    // одновременно снижает страх реакции, но при истощении капитала делает следующий поток опаснее.
+    if(memory.absorptionCount>=2 && memory.capitalDepletion>.28){
+      memory.absorptionFatigue=clamp(memory.absorptionFatigue+.035,0,1);
+    }
+    if(memory.absorptionConfidence>.45 && memory.capitalDepletion<.30 && event!=='liquidity_depletion'){
+      memory.stressMemory=clamp(memory.stressMemory-.018,0,1);
+    }
+  }
+
+  function marketMemorySnapshot(memory){
+    const m=memory||createMarketMemory();
+    return {
+      absorptionConfidence:clamp(m.absorptionConfidence||0,0,1),
+      absorptionFatigue:clamp(m.absorptionFatigue||0,0,1),
+      sellPersistence:clamp(m.sellPersistence||0,0,1),
+      buyPersistence:clamp(m.buyPersistence||0,0,1),
+      failedDemand:clamp(m.failedDemand||0,0,1),
+      capitalDepletion:clamp(m.capitalDepletion||0,0,1),
+      liquidityFatigue:clamp(m.liquidityFatigue||0,0,1),
+      stressMemory:clamp(m.stressMemory||0,0,1),
+      absorptionCount:m.absorptionCount||0,
+      failedAbsorptionCount:m.failedAbsorptionCount||0,
+      demandFailureCount:m.demandFailureCount||0,
+      eventCounts:{...(m.eventCounts||{})},
+      recentEvents:[...(m.recentEvents||[])]
+    };
+  }
+
+  function summarizeMarketMemory(ids,simMeta){
+    const rows=(ids||[]).map(id=>simMeta?.[id]?.memory).filter(Boolean);
+    if(!rows.length) return {text:'нет накопленной памяти состояния',detail:'—'};
+    const avg=key=>mean(rows.map(r=>Number(r[key])||0));
+    const absorption=avg('absorptionConfidence');
+    const fatigue=avg('absorptionFatigue');
+    const sell=avg('sellPersistence');
+    const buy=avg('buyPersistence');
+    const failed=avg('failedDemand');
+    const depletion=avg('capitalDepletion');
+    const liqFatigue=avg('liquidityFatigue');
+    const stress=avg('stressMemory');
+    const absorptionCount=avg('absorptionCount');
+
+    const candidates=[
+      {score:fatigue*.72+depletion*.55+liqFatigue*.45, text:'повторное поглощение уже расходовало ресурс; следующий сопоставимый поток может пройти через рынок сильнее'},
+      {score:sell*.72+stress*.48+liqFatigue*.38, text:'несколько переходов подряд усиливали выход; чувствительность рынка к новому предложению выросла'},
+      {score:absorption*.78+(1-depletion)*.28, text:'предыдущий поток неоднократно поглощался; рынок пока сохраняет память об устойчивом поглощении'},
+      {score:failed*.72+depletion*.34, text:'повторный спрос не давал сопоставимого сдвига; способность спроса продолжать движение ослабла'},
+      {score:buy*.72+(1-stress)*.18, text:'последовательные переходы поддерживали спрос; положительная реакция сохраняет инерцию'},
+      {score:.25, text:'память рынка пока нейтральна: прошлые переходы не создали устойчивого перекоса'}
+    ].sort((a,b)=>b.score-a.score);
+
+    return {
+      text:candidates[0].text,
+      detail:`поглощение ${Math.round(absorption*100)}% · истощение капитала ${Math.round(depletion*100)}% · усталость ликвидности ${Math.round(liqFatigue*100)}% · стресс памяти ${Math.round(stress*100)}% · среднее число поглощений ${absorptionCount.toFixed(1)}`,
+      values:{absorption,fatigue,sell,buy,failed,depletion,liqFatigue,stress,absorptionCount}
+    };
+  }
+
+  function initMarket(profileName, visual, regimes, marketStateBuckets){
+    const base=MARKET_STATE_PROFILES[profileName].map(p=>({...p}));
+    const stateBy=Object.fromEntries((marketStateBuckets||[]).map(s=>[s.name,s]));
     const regime=sampleRegime(regimes);
     const regimeDef=BEHAVIOR_REGIMES[regime] || BEHAVIOR_REGIMES.balance;
     const attention=clamp(
@@ -798,134 +1143,615 @@
       .05,.98
     );
     const baseLiquidity=profileName==="microcap" ? .55 : profileName==="midcap" ? 1.35 : 1.0;
-    return {
+
+    const market={
       price:1,
       attention,
-      liquidity:clamp(baseLiquidity*regimeDef.liquidity,.24,1.8),
+      liquidityBuffer:clamp(baseLiquidity*regimeDef.liquidity,.24,1.8),
       regime,
-      participants:base.map(p=>{
-        const st=stateBy[p.name] || {positionLoad:.5,pnl:0,buyUrgency:.5,sellUrgency:.5};
-        const load=clamp(st.positionLoad + gauss()*.035,.10,.94);
-        const pnl=clamp(st.pnl + gauss()*.035,-.55,1.8);
+      reactionState:{},
+      profitReleaseStress:0,
+      lossReactionStress:0,
+      freshDemandStress:0,
+      liquidityRetreat:0,
+      cascadeIntensity:0,
+      maxCascadeIntensity:0,
+      memory:createMarketMemory(),
+      states:base.map(p=>{
+        const st=stateBy[p.name] || {positionLoad:.5,pnl:0,buyUrgency:.5,sellUrgency:.5,cohorts:[]};
+        const sourceCohorts=st.cohorts?.length ? st.cohorts : [
+          {cohortId:'early',weight:.28,load:clamp(st.positionLoad+.08,.06,.96),pnl:st.pnl+.24,buyPressure:st.buyUrgency,sellPressure:st.sellUrgency},
+          {cohortId:'core',weight:.44,load:st.positionLoad,pnl:st.pnl+.03,buyPressure:st.buyUrgency,sellPressure:st.sellUrgency},
+          {cohortId:'late',weight:.28,load:clamp(st.positionLoad-.06,.06,.96),pnl:st.pnl-.18,buyPressure:st.buyUrgency,sellPressure:st.sellUrgency}
+        ];
+
+        const cohorts=sourceCohorts.map(c=>{
+          const cfg=COHORT_BEHAVIOR[c.cohortId] || COHORT_BEHAVIOR.core;
+          const weight=clamp(c.weight||.33,.05,.90);
+          const load=clamp((c.load ?? st.positionLoad) + gauss()*.025,.04,.97);
+          const pnl=clamp((c.pnl ?? st.pnl) + gauss()*.025,-.70,2.2);
+          const sliceCapital=Math.max(.002,p.capital*weight);
+          const inventory=clamp(sliceCapital*load*(1.70 + Math.random()*.18),.001,1);
+          const cash=clamp(sliceCapital*(1-load)*(1.70 + Math.random()*.18),.001,1);
+          return {
+            id:c.cohortId,
+            label:c.cohortLabel || cfg.label,
+            weight,
+            cash,
+            inventory,
+            initialCash:cash,
+            initialInventory:inventory,
+            avgEntry:clamp(1/Math.max(.16,1+pnl),.16,3.2),
+            age:clamp((c.cohortId==='early'?.84:c.cohortId==='late'?.18:.50)+gauss()*.04,0,1),
+            buyBias:clamp(c.buyPressure ?? st.buyUrgency,0,1),
+            sellBias:clamp(c.sellPressure ?? st.sellUrgency,0,1),
+            realizedPnl:0,
+            buyVolume:0,
+            sellVolume:0,
+            cfg
+          };
+        });
+
         return {
           ...p,
-          stateBuyUrgency:clamp(st.buyUrgency + gauss()*.035,0,1),
-          stateSellUrgency:clamp(st.sellUrgency + gauss()*.035,0,1),
-          cash:clamp(p.capital*(1-load)*(1.65 + Math.random()*.30),.01,1),
-          inventory:clamp(p.capital*load*(1.55 + Math.random()*.35),.01,1),
-          avgEntry:clamp(1/Math.max(.20,1+pnl),.20,2.2),
-          coordinated:p.name==="insiders" ? Math.random()*.5 : 0,
-          regimeSensitivity:.75 + Math.random()*.5
+          cohorts,
+          profitReleaseBias:p.name==="earlyProfitPositions" ? clamp(.28 + (st.pnl||0)*.22 + gauss()*.05,0,1) : 0,
+          regimeSensitivity:.78 + Math.random()*.44
         };
       }),
       visual
     };
+    // Базовый запас нужен только как точка отсчёта для истощения в этой симуляции.
+    market.initialReserves=pressureReserveSnapshot(market);
+    return market;
+  }
+
+  function cohortStateSnapshot(m){
+    const out=[];
+    for(const p of m.states){
+      for(const c of p.cohorts){
+        const pnl=(m.price-c.avgEntry)/Math.max(.05,c.avgEntry);
+        const total=Math.max(1e-6,c.cash+c.inventory);
+        out.push({
+          stateId:p.name,
+          stateLabel:MARKET_STATE_LABELS[p.name]||p.name,
+          cohortId:c.id,
+          cohortLabel:c.label,
+          pnl,
+          cashRatio:c.cash/total,
+          inventoryRatio:c.inventory/total,
+          realizedPnl:c.realizedPnl,
+          soldFraction:clamp(1-c.inventory/Math.max(1e-6,c.initialInventory),-1,1),
+          boughtFraction:clamp(1-c.cash/Math.max(1e-6,c.initialCash),-1,1),
+          age:c.age
+        });
+      }
+    }
+    return out;
+  }
+
+  function pressureReserveSnapshot(m){
+    let potentialSupply=0, potentialDemand=0, totalInventory=0, totalCash=0;
+    const memory=m.memory || {};
+    for(const state of m.states||[]){
+      for(const c of state.cohorts||[]){
+        const inventory=Math.max(0,c.inventory||0);
+        const cash=Math.max(0,c.cash||0);
+        const pnl=(m.price-c.avgEntry)/Math.max(.05,c.avgEntry);
+        totalInventory+=inventory;
+        totalCash+=cash;
+
+        // Это не прогноз по фигуре. Это оценка того, какая часть уже существующего
+        // запаса позиции/кэша вообще способна превратиться в следующий поток.
+        const sellActivation=clamp(sigmoid(
+          -1.15 +
+          Math.max(0,pnl)*.95 +
+          Math.max(0,-pnl)*.62 +
+          (c.sellBias||0)*.72 +
+          (c.age||0)*.18 +
+          (m.profitReleaseStress||0)*.34 +
+          (m.lossReactionStress||0)*.38 +
+          (memory.sellPersistence||0)*.22 +
+          (memory.stressMemory||0)*.18
+        ),0,1);
+
+        const buyActivation=clamp(sigmoid(
+          -1.16 +
+          (c.buyBias||0)*.74 +
+          Math.max(0,-pnl)*.12 +
+          (m.freshDemandStress||0)*.34 +
+          (memory.absorptionConfidence||0)*(1-(memory.capitalDepletion||0))*.30 +
+          (memory.buyPersistence||0)*.18 -
+          (memory.failedDemand||0)*.18
+        ),0,1);
+
+        potentialSupply += inventory*sellActivation;
+        potentialDemand += cash*buyActivation;
+      }
+    }
+
+    const liquidityCapacity=clamp((m.liquidityBuffer||1)/1.25,.20,1.35) * clamp(1-(m.liquidityRetreat||0)*.42,.45,1);
+    const effectiveDemand=potentialDemand*liquidityCapacity;
+    const totalEffective=Math.max(1e-6,potentialSupply+effectiveDemand);
+    const initial=m.initialReserves || null;
+    const supplyExhaustion=initial ? clamp(1-potentialSupply/Math.max(1e-6,initial.supplyStock),0,1) : 0;
+    const demandExhaustion=initial ? clamp(1-effectiveDemand/Math.max(1e-6,initial.demandStock),0,1) : 0;
+
+    return {
+      supplyStock:potentialSupply,
+      demandStock:effectiveDemand,
+      rawDemandStock:potentialDemand,
+      supplyShare:clamp(potentialSupply/totalEffective,0,1),
+      demandShare:clamp(effectiveDemand/totalEffective,0,1),
+      balance:clamp((effectiveDemand-potentialSupply)/totalEffective,-1,1),
+      supplyExhaustion,
+      demandExhaustion,
+      inventoryBase:totalInventory,
+      cashBase:totalCash,
+      liquidityCapacity
+    };
+  }
+
+  function systemStateSnapshot(m){
+    let inventory=0, cash=0, profitInventory=0, lossInventory=0, profitIntensity=0, lossIntensity=0;
+    for(const state of m.states||[]){
+      for(const c of state.cohorts||[]){
+        const inv=Math.max(0,c.inventory||0);
+        const available=Math.max(0,c.cash||0);
+        const pnl=(m.price-c.avgEntry)/Math.max(.05,c.avgEntry);
+        inventory+=inv;
+        cash+=available;
+        if(pnl>=0){
+          profitInventory+=inv;
+          profitIntensity+=inv*Math.min(1.5,pnl);
+        } else {
+          lossInventory+=inv;
+          lossIntensity+=inv*Math.min(1.0,-pnl);
+        }
+      }
+    }
+    const totalCapital=Math.max(1e-6,inventory+cash);
+    const totalInventory=Math.max(1e-6,inventory);
+    const reserves=pressureReserveSnapshot(m);
+    return {
+      price:m.price,
+      cashShare:clamp(cash/totalCapital,0,1),
+      inventoryShare:clamp(inventory/totalCapital,0,1),
+      profitShare:clamp(profitInventory/totalInventory,0,1),
+      lossShare:clamp(lossInventory/totalInventory,0,1),
+      profitIntensity:clamp(profitIntensity/totalInventory,0,1.5),
+      lossIntensity:clamp(lossIntensity/totalInventory,0,1),
+      liquidity:clamp((m.liquidityBuffer||0)/1.25,0,1),
+      profitRelease:clamp(m.profitReleaseStress||0,0,1),
+      lossStress:clamp(m.lossReactionStress||0,0,1),
+      demandActivation:clamp(m.freshDemandStress||0,0,1),
+      liquidityRetreat:clamp(m.liquidityRetreat||0,0,1),
+      cascade:clamp(m.cascadeIntensity||0,0,1),
+      attention:clamp(m.attention||0,0,1),
+      supplyReserve:reserves.supplyShare,
+      demandReserve:reserves.demandShare,
+      reserveBalance:reserves.balance,
+      supplyExhaustion:reserves.supplyExhaustion,
+      demandExhaustion:reserves.demandExhaustion
+    };
+  }
+
+  const TRANSITION_EVENT_LABELS = {
+    profit_release:'фиксация накопленной прибыли усиливает предложение',
+    loss_activation:'часть позиций переходит в состояние убытка и повышает готовность к выходу',
+    capital_activation:'свободный капитал начинает поглощать предложение',
+    liquidity_depletion:'способность рынка поглощать поток снижается',
+    demand_reserve_depletion:'принимающий капитал истощается быстрее потенциального предложения',
+    supply_reserve_depletion:'потенциальное предложение истощается быстрее принимающего капитала',
+    absorption:'входящий поток поглощается без сопоставимого сдвига цены',
+    inventory_rebalance:'капитал перераспределяется между позицией и свободными средствами',
+    neutral_shift:'состояние постепенно смещается без одного доминирующего события'
+  };
+
+  function classifyTransitionEvent(before, after, stepResult){
+    const dRelease=after.profitRelease-before.profitRelease;
+    const dLoss=after.lossStress-before.lossStress;
+    const dDemand=after.demandActivation-before.demandActivation;
+    const dLiquidity=after.liquidity-before.liquidity;
+    const dCash=after.cashShare-before.cashShare;
+    const dDemandExhaust=after.demandExhaustion-before.demandExhaustion;
+    const dSupplyExhaust=after.supplyExhaustion-before.supplyExhaustion;
+    const net=stepResult.netFlow||0;
+    const gross=Math.max(1e-6,stepResult.grossFlow||0);
+    const imbalance=Math.abs(net)/gross;
+    const ret=Math.abs(stepResult.ret||0);
+
+    if(dDemandExhaust>.045 && after.demandExhaustion>.24) return 'demand_reserve_depletion';
+    if(dSupplyExhaust>.045 && after.supplyExhaustion>.24) return 'supply_reserve_depletion';
+    if(dLiquidity<-.045 || after.liquidityRetreat-before.liquidityRetreat>.055) return 'liquidity_depletion';
+    if(dRelease>.055 && net<0) return 'profit_release';
+    if(dLoss>.055 || (stepResult.ret<-.004 && after.lossIntensity>before.lossIntensity+.02)) return 'loss_activation';
+    if(dDemand>.055 && net>0) return 'capital_activation';
+    if(gross>.035 && imbalance>.34 && ret<.0045) return 'absorption';
+    if(Math.abs(dCash)>.035) return 'inventory_rebalance';
+    return 'neutral_shift';
+  }
+
+  function transitionImportance(before, after, stepResult){
+    return (
+      Math.abs(stepResult.ret||0)*3.0 +
+      Math.abs(after.profitRelease-before.profitRelease)*1.4 +
+      Math.abs(after.lossStress-before.lossStress)*1.4 +
+      Math.abs(after.demandActivation-before.demandActivation)*1.1 +
+      Math.abs(after.liquidity-before.liquidity)*1.5 +
+      Math.abs(after.cashShare-before.cashShare)*.8 +
+      Math.abs(after.demandExhaustion-before.demandExhaustion)*1.25 +
+      Math.abs(after.supplyExhaustion-before.supplyExhaustion)*1.25 +
+      Math.abs(after.cascade-before.cascade)*1.0
+    );
+  }
+
+  function buildTransitionRecord(before, after, stepResult, step){
+    const event=classifyTransitionEvent(before,after,stepResult);
+    return {
+      step,
+      event,
+      score:transitionImportance(before,after,stepResult),
+      before,
+      after,
+      ret:stepResult.ret||0,
+      netFlow:stepResult.netFlow||0,
+      grossFlow:stepResult.grossFlow||0
+    };
+  }
+
+  function averageSnapshots(list,key){
+    const rows=list.map(x=>x?.[key]).filter(Boolean);
+    if(!rows.length) return null;
+    const keys=Object.keys(rows[0]);
+    const out={};
+    for(const k of keys){
+      const vals=rows.map(r=>r[k]).filter(Number.isFinite);
+      if(vals.length) out[k]=mean(vals);
+    }
+    return out;
+  }
+
+  function snapshotLabel(s){
+    if(!s) return 'нет данных';
+    const scores=[
+      ['много позиций в прибыли', s.profitShare*.55 + Math.min(1,s.profitIntensity)*.45],
+      ['много позиций под давлением', s.lossShare*.55 + s.lossIntensity*.45],
+      ['значительная доля свободного капитала', s.cashShare],
+      ['ограниченная способность поглощать поток', 1-s.liquidity],
+      ['усиливается готовность к фиксации', s.profitRelease],
+      ['усиливается стресс убыточных позиций', s.lossStress],
+      ['свободный капитал активируется', s.demandActivation],
+      ['принимающий капитал близок к истощению', s.demandExhaustion],
+      ['потенциальное предложение близко к истощению', s.supplyExhaustion]
+    ].sort((a,b)=>b[1]-a[1]);
+    return scores[0][0];
+  }
+
+  function snapshotDetail(s){
+    if(!s) return '—';
+    return `в прибыли ${(s.profitShare*100).toFixed(0)}% · в убытке ${(s.lossShare*100).toFixed(0)}% · свободный капитал ${(s.cashShare*100).toFixed(0)}% · предложение ${(s.supplyReserve*100).toFixed(0)}% · принимающий капитал ${(s.demandReserve*100).toFixed(0)}%`;
+  }
+
+  function summarizeTransitions(ids,simMeta){
+    const records=[];
+    for(const id of ids||[]){
+      const rec=simMeta?.[id]?.keyTransition;
+      if(rec) records.push(rec);
+    }
+    if(!records.length) return {before:'нет данных',beforeDetail:'—',event:'нет выраженного события',eventDetail:'—',after:'нет данных',afterDetail:'—',text:'нет выраженного перехода'};
+
+    const weighted={};
+    for(const r of records) weighted[r.event]=(weighted[r.event]||0)+Math.max(.01,r.score);
+    const dominant=Object.entries(weighted).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'neutral_shift';
+    const selected=records.filter(r=>r.event===dominant);
+    const before=averageSnapshots(selected,'before') || averageSnapshots(records,'before');
+    const after=averageSnapshots(selected,'after') || averageSnapshots(records,'after');
+    const avgRet=mean(selected.map(r=>r.ret||0));
+    const avgNet=mean(selected.map(r=>r.netFlow||0));
+    const eventLabel=TRANSITION_EVENT_LABELS[dominant] || TRANSITION_EVENT_LABELS.neutral_shift;
+    const eventDetail=`средний сдвиг цены ${(avgRet*100).toFixed(2)}% · чистый поток ${avgNet>=0?'+':''}${avgNet.toFixed(3)}`;
+    const beforeLabel=snapshotLabel(before);
+    const afterLabel=snapshotLabel(after);
+    return {
+      eventId:dominant,
+      before:beforeLabel,
+      beforeDetail:snapshotDetail(before),
+      event:eventLabel,
+      eventDetail,
+      after:afterLabel,
+      afterDetail:snapshotDetail(after),
+      text:`${beforeLabel} → ${eventLabel} → ${afterLabel}`
+    };
+  }
+
+  function renderTransitionStrip(el,t){
+    if(!el) return;
+    el.innerHTML=`
+      <div class="transition-card"><small>До</small><b>${t.before}</b><span>${t.beforeDetail}</span></div>
+      <div class="transition-arrow">→</div>
+      <div class="transition-card"><small>Событие</small><b>${t.event}</b><span>${t.eventDetail}</span></div>
+      <div class="transition-arrow">→</div>
+      <div class="transition-card"><small>После</small><b>${t.after}</b><span>${t.afterDetail}</span></div>`;
+  }
+
+  function updateMarketInteractions(m, groupFlows){
+    const entries=Object.entries(groupFlows||{});
+    const total=entries.reduce((sum,[,v])=>sum+Math.abs(v),0) || 1;
+    const normalized={};
+    for(const [name,v] of entries) normalized[name]=v/total;
+
+    const rawSignals={};
+    const edges={};
+    for(const rule of INTERACTION_RULES){
+      const sourceFlow=normalized[rule.source] || 0;
+      if(Math.abs(sourceFlow)<.015) continue;
+      const coeff=sourceFlow>=0 ? rule.buy : rule.sell;
+      const contribution=sourceFlow*coeff;
+      rawSignals[rule.target]=(rawSignals[rule.target]||0)+contribution;
+      const side=contribution>=0?'buy':'sell';
+      const key=`${rule.source}>${rule.target}:${side}`;
+      edges[key]=(edges[key]||0)+Math.abs(contribution);
+    }
+
+    for(const name of Object.keys(MARKET_STATE_LABELS)){
+      const prev=m.reactionState?.[name] || 0;
+      const fresh=rawSignals[name] || 0;
+      m.reactionState[name]=clamp(prev*.58 + fresh*1.20,-1,1);
+    }
+
+    const neg=name=>Math.max(0,-(normalized[name]||0));
+    const pos=name=>Math.max(0, normalized[name]||0);
+    const informedNow=clamp(neg('earlyProfitPositions')*.85 + neg('profitablePositions')*.70 + neg('outsideCapital')*.45,0,1);
+    const crowdNow=clamp(neg('lossPositions')*.68 + neg('freshPositions')*.55 + neg('fastFlow')*.22,0,1);
+    const chaseNow=clamp(pos('lossPositions')*.55 + pos('freshPositions')*.48 + pos('fastFlow')*.30 + pos('mechanicalFlow')*.22,0,1);
+
+    m.profitReleaseStress=clamp(m.profitReleaseStress*.64 + informedNow*.82,0,1);
+    m.lossReactionStress=clamp(m.lossReactionStress*.60 + crowdNow*.82 + m.profitReleaseStress*.10,0,1);
+    m.freshDemandStress=clamp(m.freshDemandStress*.61 + chaseNow*.82,0,1);
+    m.liquidityRetreat=clamp(
+      m.liquidityRetreat*.68 +
+      m.profitReleaseStress*.28 +
+      m.lossReactionStress*.22 +
+      Math.max(0,m.cascadeIntensity-.55)*.10,
+      0,1
+    );
+
+    const maxReaction=Math.max(0,...Object.values(m.reactionState).map(v=>Math.abs(v)));
+    m.cascadeIntensity=clamp(
+      maxReaction*.40 +
+      m.profitReleaseStress*.30 +
+      m.lossReactionStress*.28 +
+      m.freshDemandStress*.18 +
+      m.liquidityRetreat*.28,
+      0,1
+    );
+    m.maxCascadeIntensity=Math.max(m.maxCascadeIntensity||0,m.cascadeIntensity);
+
+    return {edges,normalized};
   }
 
   function stepMarket(m, step, horizon){
-    let buyFlow=0,sellFlow=0;
+    let buyFlow=0,sellFlow=0,buyConsumption=0,sellConsumption=0;
     const groupFlows={};
+    const cohortFlows={};
     const v=m.visual;
     const recentRet=m.lastReturn||0;
     const crowdShock=clamp(recentRet*15,-1,1);
     const fatigue=step/horizon;
     const regimeDef=BEHAVIOR_REGIMES[m.regime] || BEHAVIOR_REGIMES.balance;
+    const memory=m.memory || (m.memory=createMarketMemory());
+    const memoryBuySupport=clamp(memory.absorptionConfidence*(1-memory.capitalDepletion)*.70 + memory.buyPersistence*.34 - memory.failedDemand*.28, -.4, .8);
+    const memorySellPressure=clamp(memory.sellPersistence*.46 + memory.stressMemory*.38 + memory.liquidityFatigue*.30 + memory.absorptionFatigue*.28, 0, 1.2);
+    const reserveBefore=pressureReserveSnapshot(m);
+    const reserveDemandSupport=Math.max(0,reserveBefore.balance);
+    const reserveSupplyPressure=Math.max(0,-reserveBefore.balance);
 
-    for(const p of m.participants){
-      const pnl=(m.price-p.avgEntry)/Math.max(.05,p.avgEntry);
-      const availableCash=clamp(p.cash,0,2), inventory=clamp(p.inventory,0,2);
+    for(const p of m.states){
       const rb=regimeSideBoost(m.regime,p.name,'buy')*p.regimeSensitivity;
       const rs=regimeSideBoost(m.regime,p.name,'sell')*p.regimeSensitivity;
 
-      // 95%: behavioural state and participant incentives.
-      let buyScore=
-        -0.18 +
-        .84*p.fomo*m.attention +
-        .54*p.aggression*Math.max(0,v.pressureBias) +
-        .24*p.aggression*Math.max(0,crowdShock) +
-        .30*v.absorption +
-        .22*availableCash +
-        .38*(p.stateBuyUrgency||0) -
-        .12*(p.stateSellUrgency||0) +
-        rb -
-        .28*Math.max(0,pnl) +
-        gauss()*.34;
-
-      let sellScore=
-        -0.16 +
-        .86*p.profit*Math.max(0,pnl) +
-        .66*p.panic*v.crowdStress +
-        .46*p.panic*Math.max(0,-v.pressureBias) +
-        .42*p.panic*Math.max(0,-crowdShock) +
-        .42*v.capitulationRisk +
-        .28*v.distributionRisk +
-        .16*fatigue*p.profit +
-        .20*inventory +
-        .38*(p.stateSellUrgency||0) -
-        .10*(p.stateBuyUrgency||0) +
-        rs +
-        gauss()*.34;
-
-      if(p.name==="insiders"){
-        p.coordinated=clamp(p.coordinated + gauss()*.05 + Math.max(0,pnl)*.02 + v.reflexivity*.018,0,1);
-        sellScore += p.coordinated*.72;
-      }
-      if(p.name==="liquidity"){
-        buyScore += Math.max(0,-crowdShock)*.74 + v.absorption*.30;
-        sellScore += Math.max(0,crowdShock)*.74 + v.crowdStress*.12;
+      if(p.name==="earlyProfitPositions"){
+        const avgPnl=mean(p.cohorts.map(c=>(m.price-c.avgEntry)/Math.max(.05,c.avgEntry)));
+        p.profitReleaseBias=clamp(p.profitReleaseBias*.985 + Math.max(0,avgPnl)*.020 + v.distributionRisk*.010 + gauss()*.018,0,1);
       }
 
-      const holdScore=.50 + (1-p.aggression)*.40 + (1-v.reflexivity)*.10 + gauss()*.12;
-      const [pb,ph]=softmax3(buyScore,holdScore,sellScore);
-      const r=Math.random();
-      const side=r<pb ? 1 : (r<pb+ph ? 0 : -1);
-      if(side===0) continue;
+      for(const c of p.cohorts){
+        const cfg=c.cfg || COHORT_BEHAVIOR.core;
+        const pnl=(m.price-c.avgEntry)/Math.max(.05,c.avgEntry);
+        const availableCash=clamp(c.cash,0,2);
+        const inventory=clamp(c.inventory,0,2);
+        const initialInventory=Math.max(.001,c.initialInventory);
+        const initialCash=Math.max(.001,c.initialCash);
+        const inventoryRemaining=clamp(inventory/initialInventory,0,1.6);
+        const cashRemaining=clamp(availableCash/initialCash,0,1.6);
+        const profitPressure=Math.max(0,pnl)*cfg.takeProfit;
+        const lossPain=Math.max(0,-pnl)*cfg.panic;
+        const chasePressure=Math.max(0,crowdShock)*cfg.chase + Math.max(0,v.pressureBias)*cfg.chase*.55;
+        const agePressure=c.age*cfg.takeProfit*.16;
+        const exhaustedSeller=clamp(1-inventoryRemaining,0,1);
+        const exhaustedBuyer=clamp(1-cashRemaining,0,1);
+        const cohortReactionScale=c.id==='late'?1.20:(c.id==='early'?.72:1.0);
+        const reaction=(m.reactionState?.[p.name]||0)*(STATE_REACTION_SENSITIVITY[p.name]||.5)*cohortReactionScale;
+        const reactiveBuy=Math.max(0,reaction);
+        const reactiveSell=Math.max(0,-reaction);
 
-      const sizeBase=Math.exp(-2.42 + gauss()*.75) * (.42 + p.aggression + v.reflexivity*.12);
-      if(side>0){
-        const q=Math.min(availableCash,sizeBase*(.68+p.flow*2.15));
-        buyFlow+=q;
-        groupFlows[p.name]=(groupFlows[p.name]||0)+q;
-        p.cash-=q*.10; p.inventory+=q*.10;
-        p.avgEntry=lerp(p.avgEntry,m.price,clamp(q*.08,0,.25));
-      } else {
-        const q=Math.min(inventory,sizeBase*(.68+p.flow*2.15));
-        sellFlow+=q;
-        groupFlows[p.name]=(groupFlows[p.name]||0)-q;
-        p.inventory-=q*.10; p.cash+=q*.10;
+        // 95%: состояние капитала и вероятная реакция рынка на уже произошедшее движение.
+        let buyScore=
+          -0.22 +
+          .54*p.fomo*m.attention +
+          .42*p.aggression*Math.max(0,v.pressureBias) +
+          .20*p.aggression*Math.max(0,crowdShock) +
+          .28*v.absorption +
+          .36*c.buyBias +
+          .72*reactiveBuy +
+          .46*cfg.chase*m.attention +
+          .34*chasePressure +
+          .24*cashRemaining +
+          .14*cfg.reentry*Math.max(0,-pnl) +
+          rb -
+          .24*Math.max(0,pnl) -
+          .28*exhaustedBuyer +
+          .24*memoryBuySupport -
+          .14*memory.capitalDepletion -
+          .16*memory.failedDemand +
+          .20*reserveDemandSupport -
+          .12*reserveSupplyPressure -
+          .30*reserveBefore.demandExhaustion +
+          .10*reserveBefore.supplyExhaustion +
+          gauss()*.30;
+
+        let sellScore=
+          -0.20 +
+          .50*p.profit*profitPressure +
+          .58*p.panic*v.crowdStress +
+          .36*p.panic*Math.max(0,-v.pressureBias) +
+          .34*p.panic*Math.max(0,-crowdShock) +
+          .40*v.capitulationRisk +
+          .28*v.distributionRisk +
+          .38*c.sellBias +
+          .76*reactiveSell +
+          .56*lossPain +
+          .42*profitPressure +
+          agePressure +
+          .12*fatigue*p.profit +
+          rs -
+          .34*exhaustedSeller +
+          .22*memorySellPressure +
+          .12*memory.failedDemand +
+          .20*reserveSupplyPressure -
+          .10*reserveDemandSupport -
+          .28*reserveBefore.supplyExhaustion +
+          .12*reserveBefore.demandExhaustion +
+          gauss()*.30;
+
+        // Причинные реакции между состояниями капитала: фиксация прибыли, убыток, свежий спрос и доступная ликвидность.
+        if(p.name==='lossPositions') sellScore += m.profitReleaseStress*.46 + m.lossReactionStress*.18;
+        if(p.name==='freshPositions') sellScore += m.profitReleaseStress*.28 + m.lossReactionStress*(c.id==='late'?.52:.30);
+        if(p.name==='fastFlow') sellScore += m.profitReleaseStress*.34 + m.lossReactionStress*.24;
+        if(p.name==='mechanicalFlow') sellScore += m.profitReleaseStress*.30 + m.lossReactionStress*.20;
+        if((p.name==='earlyProfitPositions'||p.name==='profitablePositions') && c.id==='early') sellScore += m.freshDemandStress*.34;
+        if((p.name==='profitablePositions'||p.name==='outsideCapital') && v.absorption>.45) buyScore += m.lossReactionStress*.14*v.absorption;
+
+        // Память рынка: реакция зависит от того, что уже происходило в этой симуляции.
+        if(p.name==='lossPositions' || p.name==='freshPositions'){
+          sellScore += memory.stressMemory*.34 + memory.sellPersistence*.28;
+          buyScore -= memory.liquidityFatigue*.10;
+        }
+        if(p.name==='outsideCapital' || p.name==='liquidityBuffer'){
+          buyScore += memory.absorptionConfidence*(1-memory.capitalDepletion)*.28;
+          buyScore -= memory.capitalDepletion*.26 + memory.absorptionFatigue*.18;
+        }
+        if(p.name==='profitablePositions' || p.name==='earlyProfitPositions'){
+          sellScore += memory.failedDemand*.24 + memory.sellPersistence*.18;
+        }
+        if(p.name==='fastFlow' || p.name==='mechanicalFlow'){
+          buyScore += memory.buyPersistence*.20;
+          sellScore += memory.sellPersistence*.20;
+        }
+
+        // Ранние входы чаще фиксируют прибыль; поздние сильнее паникуют в убытке.
+        if(c.id==='early') sellScore += Math.max(0,pnl)*.38 + (m.regime==='distribution'?.30:0);
+        if(c.id==='late'){
+          buyScore += Math.max(0,crowdShock)*.18 + (m.regime==='fomo_chase'?.28:0);
+          sellScore += Math.max(0,-pnl)*.55 + (m.regime==='panic_exit'?.32:0);
+        }
+        if(c.id==='core') sellScore += Math.max(0,pnl)*.10;
+
+        if(p.name==="earlyProfitPositions") sellScore += p.profitReleaseBias*.58*(c.id==='early'?1.12:.92);
+        if(p.name==="liquidityBuffer"){
+          buyScore += Math.max(0,-crowdShock)*.62 + v.absorption*.26;
+          sellScore += Math.max(0,crowdShock)*.62 + v.crowdStress*.10;
+        }
+
+        const holdScore=.54 + cfg.patience*.34 + (1-p.aggression)*.20 + (1-v.reflexivity)*.08 + gauss()*.10;
+        const [pb,ph]=softmax3(buyScore,holdScore,sellScore);
+        const r=Math.random();
+        const side=r<pb ? 1 : (r<pb+ph ? 0 : -1);
+
+        c.age=clamp(c.age + .18/Math.max(12,horizon),0,1.35);
+        // Давления тоже живые: прибыль/убыток постепенно сдвигают поведение когорты.
+        c.buyBias=clamp(c.buyBias*.985 + pb*.015,0,1);
+        c.sellBias=clamp(c.sellBias*.985 + (1-pb-ph)*.015,0,1);
+        if(side===0) continue;
+
+        const cohortScale=.52 + c.weight*1.15;
+        const sizeBase=Math.exp(-2.55 + gauss()*.66) * (.38 + p.aggression + v.reflexivity*.10) * cohortScale;
+        const key=`${p.name}:${c.id}`;
+
+        if(side>0){
+          const q=Math.min(availableCash,sizeBase*(.62+p.flow*1.95));
+          if(q<=0) continue;
+          buyFlow+=q;
+          groupFlows[p.name]=(groupFlows[p.name]||0)+q;
+          cohortFlows[key]=(cohortFlows[key]||0)+q;
+          c.buyVolume+=q;
+          buyConsumption+=q*.11;
+          c.cash=clamp(c.cash-q*.11,0,2);
+          c.inventory=clamp(c.inventory+q*.11,0,2);
+          c.avgEntry=lerp(c.avgEntry,m.price,clamp(q*.10/Math.max(.01,c.inventory),0,.30));
+        } else {
+          const q=Math.min(inventory,sizeBase*(.62+p.flow*1.95));
+          if(q<=0) continue;
+          sellFlow+=q;
+          groupFlows[p.name]=(groupFlows[p.name]||0)-q;
+          cohortFlows[key]=(cohortFlows[key]||0)-q;
+          c.sellVolume+=q;
+          c.realizedPnl += q*((m.price-c.avgEntry)/Math.max(.05,c.avgEntry));
+          sellConsumption+=q*.11;
+          c.inventory=clamp(c.inventory-q*.11,0,2);
+          c.cash=clamp(c.cash+q*.11,0,2);
+        }
       }
     }
 
     const net=buyFlow-sellFlow, total=buyFlow+sellFlow;
     const imbalance=total>0 ? Math.abs(net)/total : 0;
-    const regimeLiquidityTarget=clamp((m.regime==='liquidity_vacuum'?.62:1.0)*regimeDef.liquidity,.24,1.8);
-    const stress=clamp(imbalance*(.52 + Math.abs(crowdShock)) + v.crowdStress*.18 + v.liquidityFragility*.16,0,1);
-    m.liquidity=clamp(
-      m.liquidity + .020*(regimeLiquidityTarget-m.liquidity) + .016*(1-m.liquidity) - .032*stress + gauss()*.006 + v.absorption*.004,
-      .24,1.8
+
+    // Текущий поток меняет состояние остальных слоёв капитала и доступность ликвидности на следующих шагах.
+    const interactionUpdate=updateMarketInteractions(m,groupFlows);
+    const retreatMultiplier=clamp(1-m.liquidityRetreat*.46,.46,1.02);
+    const memoryLiquidityMultiplier=clamp(
+      1 - memory.liquidityFatigue*.34 - memory.absorptionFatigue*.22 - memory.capitalDepletion*.16 + memory.absorptionConfidence*(1-memory.capitalDepletion)*.10,
+      .48,1.10
+    );
+    const regimeLiquidityTarget=clamp((m.regime==='liquidity_vacuum'?.62:1.0)*regimeDef.liquidity*retreatMultiplier*memoryLiquidityMultiplier,.20,1.8);
+    const stress=clamp(
+      imbalance*(.52 + Math.abs(crowdShock)) +
+      v.crowdStress*.16 +
+      v.liquidityBufferFragility*.14 +
+      m.profitReleaseStress*.22 +
+      m.lossReactionStress*.20 +
+      m.cascadeIntensity*.16 +
+      memory.stressMemory*.12 +
+      memory.liquidityFatigue*.12,
+      0,1
+    );
+    m.liquidityBuffer=clamp(
+      m.liquidityBuffer + .022*(regimeLiquidityTarget-m.liquidityBuffer) + .014*(1-m.liquidityBuffer) - .034*stress + gauss()*.006 + v.absorption*.004,
+      .20,1.8
     );
 
-    const impactMagnitude=.020 * Math.pow(Math.abs(net)/Math.max(.10,m.liquidity),.58);
-    const microNoise=gauss()*(.0021 + .0048*v.crowdStress + .0028*v.liquidityFragility);
+    const reserveAfter=pressureReserveSnapshot(m);
+    const receivingSideExhaustion=net<0 ? reserveAfter.demandExhaustion : reserveAfter.supplyExhaustion;
+    const reserveImpactMultiplier=1 + receivingSideExhaustion*.34 + Math.abs(reserveAfter.balance)*.08;
+    const impactMagnitude=.020 * Math.pow(Math.abs(net)/Math.max(.10,m.liquidityBuffer),.58) * (1 + memory.liquidityFatigue*.18 + memory.absorptionFatigue*.12) * reserveImpactMultiplier;
+    const microNoise=gauss()*(.0021 + .0048*v.crowdStress + .0028*v.liquidityBufferFragility);
+    const regimeDirection={accumulation:.18,fomo_chase:.62,distribution:-.50,panic_exit:-.76,absorption:.16,liquidity_vacuum:0,balance:0}[m.regime] || 0;
 
-    const regimeDirection={
-      accumulation:.18,
-      fomo_chase:.62,
-      distribution:-.50,
-      panic_exit:-.76,
-      absorption:.16,
-      liquidity_vacuum:0,
-      balance:0
-    }[m.regime] || 0;
-
+    const cascadeDirection=clamp(m.freshDemandStress - m.lossReactionStress - m.profitReleaseStress*.72,-1,1);
     const behaviorRet=
       Math.sign(net||1)*impactMagnitude +
       microNoise +
       .0012*v.pressureBias*(.35+.65*m.attention) +
       .0010*regimeDirection*(.4+.6*m.attention) +
-      .0007*Math.sign(crowdShock||1)*v.reflexivity*(1-fatigue);
+      .0007*Math.sign(crowdShock||1)*v.reflexivity*(1-fatigue) +
+      .0011*cascadeDirection*m.cascadeIntensity +
+      .0008*(memory.buyPersistence-memory.sellPersistence) -
+      .0006*memory.failedDemand;
 
-    // 5% only: local visual continuity. It decays rapidly and cannot create a scenario by itself.
+
+    // 5% только для визуальной непрерывности последних свечей; не создаёт сценарий сама по себе.
     const continuityFade=Math.exp(-step/Math.max(3,horizon*.10));
     const continuityRet=.034*v.continuityTrace*continuityFade;
 
@@ -940,35 +1766,169 @@
     );
 
     maybeTransitionRegime(m,ret,imbalance,step);
-    return {price:m.price,ret,groupFlows,regime:m.regime};
+    return {
+      price:m.price,
+      ret,
+      groupFlows,
+      cohortFlows,
+      interactions:interactionUpdate.edges,
+      cascadeIntensity:m.cascadeIntensity,
+      liquidityRetreat:m.liquidityRetreat,
+      profitReleaseStress:m.profitReleaseStress,
+      lossReactionStress:m.lossReactionStress,
+      freshDemandStress:m.freshDemandStress,
+      netFlow:net,
+      grossFlow:total,
+      buyFlow,
+      sellFlow,
+      reserves:{
+        before:reserveBefore,
+        after:reserveAfter,
+        supplyRunway:sellConsumption>.0008 ? clamp(reserveAfter.supplyStock/sellConsumption,0,50) : null,
+        demandRunway:buyConsumption>.0008 ? clamp(reserveAfter.demandStock/buyConsumption,0,50) : null
+      },
+      regime:m.regime
+    };
   }
 
-  function runSimulations(visual, regimes, participantStates, profile, simulations, horizon){
+  async function runSimulations(visual, regimes, marketStateBuckets, profile, simulations, horizon){
     const paths=[];
     const flowSummary={};
+    const cohortFlowSummary={};
+    const interactionSummary={};
     const regimeOccupancy={};
     const simMeta=[];
+    const batch=200;
 
     for(let s=0;s<simulations;s++){
-      const m=initMarket(profile,visual,regimes,participantStates);
+      const m=initMarket(profile,visual,regimes,marketStateBuckets);
       const path=[1];
       const localFlows={};
+      const localCohortFlows={};
+      const localInteractions={};
       const localRegimes={};
+      let cascadeSum=0;
+      let retreatSum=0;
+      let informedSum=0;
+      let panicSum=0;
+      let chaseSum=0;
+      let cascadeMax=0;
+      let keyTransition=null;
+      let reserveInitial=null,reserveFinal=null,reserveSupplySum=0,reserveDemandSum=0,reserveBalanceSum=0;
+      let reserveSupplyExhaustMax=0,reserveDemandExhaustMax=0,supplyRunwaySum=0,demandRunwaySum=0,supplyRunwayN=0,demandRunwayN=0;
+
       for(let t=0;t<horizon;t++){
         regimeOccupancy[m.regime]=(regimeOccupancy[m.regime]||0)+1;
         localRegimes[m.regime]=(localRegimes[m.regime]||0)+1;
+        const beforeState=systemStateSnapshot(m);
         const stepResult=stepMarket(m,t,horizon);
+        const afterState=systemStateSnapshot(m);
+        const transition=buildTransitionRecord(beforeState,afterState,stepResult,t);
+        updateMarketMemory(m,beforeState,afterState,stepResult,transition);
+        if(!keyTransition || transition.score>keyTransition.score) keyTransition=transition;
         path.push(stepResult.price);
         for(const [name,value] of Object.entries(stepResult.groupFlows)){
           flowSummary[name]=(flowSummary[name]||0)+value;
           localFlows[name]=(localFlows[name]||0)+value;
         }
+        for(const [key,value] of Object.entries(stepResult.cohortFlows||{})){
+          cohortFlowSummary[key]=(cohortFlowSummary[key]||0)+value;
+          localCohortFlows[key]=(localCohortFlows[key]||0)+value;
+        }
+        for(const [key,value] of Object.entries(stepResult.interactions||{})){
+          interactionSummary[key]=(interactionSummary[key]||0)+value;
+          localInteractions[key]=(localInteractions[key]||0)+value;
+        }
+        cascadeSum += stepResult.cascadeIntensity||0;
+        retreatSum += stepResult.liquidityRetreat||0;
+        informedSum += stepResult.profitReleaseStress||0;
+        panicSum += stepResult.lossReactionStress||0;
+        chaseSum += stepResult.freshDemandStress||0;
+        cascadeMax = Math.max(cascadeMax, stepResult.cascadeIntensity||0);
+        if(stepResult.reserves){
+          reserveInitial ||= stepResult.reserves.before;
+          reserveFinal = stepResult.reserves.after;
+          reserveSupplySum += stepResult.reserves.after.supplyShare||0;
+          reserveDemandSum += stepResult.reserves.after.demandShare||0;
+          reserveBalanceSum += stepResult.reserves.after.balance||0;
+          reserveSupplyExhaustMax=Math.max(reserveSupplyExhaustMax,stepResult.reserves.after.supplyExhaustion||0);
+          reserveDemandExhaustMax=Math.max(reserveDemandExhaustMax,stepResult.reserves.after.demandExhaustion||0);
+          if(Number.isFinite(stepResult.reserves.supplyRunway)){ supplyRunwaySum+=stepResult.reserves.supplyRunway; supplyRunwayN++; }
+          if(Number.isFinite(stepResult.reserves.demandRunway)){ demandRunwaySum+=stepResult.reserves.demandRunway; demandRunwayN++; }
+        }
       }
+
       paths.push(path);
-      simMeta.push({flows:localFlows,regimes:localRegimes});
+      simMeta.push({
+        flows:localFlows,
+        cohortFlows:localCohortFlows,
+        interactions:localInteractions,
+        regimes:localRegimes,
+        cascadeAvg:cascadeSum/Math.max(1,horizon),
+        cascadeMax,
+        liquidityRetreatAvg:retreatSum/Math.max(1,horizon),
+        informedSellAvg:informedSum/Math.max(1,horizon),
+        lossReactionStressAvg:panicSum/Math.max(1,horizon),
+        chaseAvg:chaseSum/Math.max(1,horizon),
+        keyTransition,
+        reserve:{
+          initial:reserveInitial,
+          final:reserveFinal,
+          supplyShareAvg:reserveSupplySum/Math.max(1,horizon),
+          demandShareAvg:reserveDemandSum/Math.max(1,horizon),
+          balanceAvg:reserveBalanceSum/Math.max(1,horizon),
+          supplyExhaustionMax:reserveSupplyExhaustMax,
+          demandExhaustionMax:reserveDemandExhaustMax,
+          supplyRunwayAvg:supplyRunwayN?supplyRunwaySum/supplyRunwayN:null,
+          demandRunwayAvg:demandRunwayN?demandRunwaySum/demandRunwayN:null
+        },
+        memory:marketMemorySnapshot(m.memory),
+        finalCohorts:cohortStateSnapshot(m)
+      });
+
+      if((s+1)%batch===0 && s+1<simulations){
+        if(els.status) els.status.textContent=`симуляция ${Math.round((s+1)/simulations*100)}%`;
+        await new Promise(resolve=>requestAnimationFrame(resolve));
+      }
     }
 
-    return {paths,flowSummary,regimeOccupancy,simMeta};
+    return {paths,flowSummary,cohortFlowSummary,interactionSummary,regimeOccupancy,simMeta};
+  }
+
+  function summarizePressureReserves(ids,simMeta){
+    const rows=(ids||[]).map(id=>simMeta?.[id]?.reserve).filter(Boolean);
+    if(!rows.length) return {supply:.5,demand:.5,text:'нет данных о запасах давления',detail:'—'};
+    const avg=k=>mean(rows.map(r=>r?.[k]).filter(Number.isFinite));
+    const supply=clamp(avg('supplyShareAvg'),0,1);
+    const demand=clamp(avg('demandShareAvg'),0,1);
+    const balance=clamp(avg('balanceAvg'),-1,1);
+    const supplyEx=clamp(avg('supplyExhaustionMax'),0,1);
+    const demandEx=clamp(avg('demandExhaustionMax'),0,1);
+    const supplyRun=avg('supplyRunwayAvg');
+    const demandRun=avg('demandRunwayAvg');
+
+    let text='запасы давления близки к балансу';
+    if(demandEx>supplyEx+.12) text='принимающий капитал истощается раньше потенциального предложения';
+    else if(supplyEx>demandEx+.12) text='потенциальное предложение истощается раньше принимающего капитала';
+    else if(supply>demand+.12) text='запас потенциального предложения сейчас больше принимающего капитала';
+    else if(demand>supply+.12) text='принимающий капитал сейчас превосходит потенциальное предложение';
+
+    const runway=[];
+    if(Number.isFinite(supplyRun)) runway.push(`ресурс предложения ≈ ${supplyRun.toFixed(1)} шага текущего расхода`);
+    if(Number.isFinite(demandRun)) runway.push(`ресурс приёма ≈ ${demandRun.toFixed(1)} шага текущего расхода`);
+    return {
+      supply,demand,balance,supplyEx,demandEx,supplyRun,demandRun,text,
+      detail:`предложение ${(supply*100).toFixed(0)}% · принимающий капитал ${(demand*100).toFixed(0)}% · истощение предложения ${(supplyEx*100).toFixed(0)}% · истощение принимающего капитала ${(demandEx*100).toFixed(0)}%${runway.length?` · ${runway.join(' · ')}`:''}`
+    };
+  }
+
+  function renderPressureReserves(summary){
+    if(!summary) return;
+    if(els.supplyReserveValue) els.supplyReserveValue.textContent=`${(summary.supply*100).toFixed(0)}%`;
+    if(els.demandReserveValue) els.demandReserveValue.textContent=`${(summary.demand*100).toFixed(0)}%`;
+    if(els.supplyReserveBar) els.supplyReserveBar.style.width=`${clamp(summary.supply,0,1)*100}%`;
+    if(els.demandReserveBar) els.demandReserveBar.style.width=`${clamp(summary.demand,0,1)*100}%`;
+    if(els.reserveDetail) els.reserveDetail.textContent=`${summary.text}. ${summary.detail}`;
   }
 
   function pathFeatures(path){
@@ -1007,28 +1967,149 @@
     return clusters;
   }
 
-  function summarizeClusterDriver(cluster, simMeta){
+  function summarizeClusterDriver(cluster, simMeta, cohortStates){
     const flows={};
+    const cohortFlows={};
     const regimes={};
     for(const id of cluster.ids||[]){
       const meta=simMeta?.[id];
       if(!meta) continue;
       for(const [name,v] of Object.entries(meta.flows||{})) flows[name]=(flows[name]||0)+v;
+      for(const [key,v] of Object.entries(meta.cohortFlows||{})) cohortFlows[key]=(cohortFlows[key]||0)+v;
       for(const [name,v] of Object.entries(meta.regimes||{})) regimes[name]=(regimes[name]||0)+v;
     }
+
+    const cohortEntries=Object.entries(cohortFlows).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
+    const topCohort=cohortEntries[0] || null;
+    const topReg=Object.entries(regimes).sort((a,b)=>b[1]-a[1])[0] || null;
+
+    if(topCohort){
+      const [stateId,cohortId]=topCohort[0].split(':');
+      const side=topCohort[1]>=0?'BUY':'SELL';
+      const stateLabelText=MARKET_STATE_LABELS[stateId]||stateId;
+      const cohortLabel=COHORT_BEHAVIOR[cohortId]?.label || cohortId;
+      const regime=topReg ? (BEHAVIOR_REGIMES[topReg[0]]?.label||topReg[0]) : null;
+      return {
+        stateId:stateId,
+        side,
+        regime:topReg?.[0]||null,
+        cohort:cohortId,
+        text:`${stateLabelText} · ${cohortLabel} · ${side==='BUY'?'покупка':'продажа'}${regime?` · ${regime}`:''}`
+      };
+    }
+
     const entries=Object.entries(flows).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
     const top=entries[0] || null;
-    const topReg=Object.entries(regimes).sort((a,b)=>b[1]-a[1])[0] || null;
-    if(!top) return {text:'нет явного источника потока', participant:null, side:null, regime:null};
+    if(!top) return {text:'нет одного доминирующего механизма', stateId:null, side:null, regime:null, cohort:null};
     const side=top[1]>=0?'BUY':'SELL';
-    const participant=PARTICIPANT_LABELS[top[0]]||top[0];
+    const stateLabelText=MARKET_STATE_LABELS[top[0]]||top[0];
     const regime=topReg ? (BEHAVIOR_REGIMES[topReg[0]]?.label||topReg[0]) : null;
-    return {
-      participant:top[0],
-      side,
-      regime:topReg?.[0]||null,
-      text:`${participant} · ${side}${regime?` · ${regime}`:''}`
+    return {stateId:top[0],side,regime:topReg?.[0]||null,cohort:null,text:`${stateLabelText} · ${side==='BUY'?'покупка':'продажа'}${regime?` · ${regime}`:''}`};
+  }
+
+  function parseInteractionKey(key){
+    const [edge,side='sell']=String(key||'').split(':');
+    const [source,target]=edge.split('>');
+    return {source,target,side};
+  }
+
+  function summarizeInteractionChain(cluster, simMeta){
+    const interactions={};
+    let cascadeAvg=0, cascadeMax=0, retreatAvg=0, informedAvg=0, panicAvg=0, chaseAvg=0, n=0;
+    for(const id of cluster?.ids||[]){
+      const meta=simMeta?.[id];
+      if(!meta) continue;
+      n++;
+      for(const [key,v] of Object.entries(meta.interactions||{})) interactions[key]=(interactions[key]||0)+v;
+      cascadeAvg += meta.cascadeAvg||0;
+      cascadeMax = Math.max(cascadeMax,meta.cascadeMax||0);
+      retreatAvg += meta.liquidityRetreatAvg||0;
+      informedAvg += meta.informedSellAvg||0;
+      panicAvg += meta.lossReactionStressAvg||0;
+      chaseAvg += meta.chaseAvg||0;
+    }
+    n=Math.max(1,n);
+    cascadeAvg/=n; retreatAvg/=n; informedAvg/=n; panicAvg/=n; chaseAvg/=n;
+
+    const ordered=Object.entries(interactions).sort((a,b)=>b[1]-a[1]);
+    if(!ordered.length){
+      return {text:'выраженной цепочки реакции нет',cascadeAvg,cascadeMax,retreatAvg};
+    }
+
+    const first=parseInteractionKey(ordered[0][0]);
+    let chain=[first.source,first.target];
+    let side=first.side;
+
+    const next=ordered
+      .map(([key,value])=>({...parseInteractionKey(key),value}))
+      .find(e=>e.source===first.target && e.side===side && !chain.includes(e.target));
+    if(next) chain.push(next.target);
+
+    const third=next ? ordered
+      .map(([key,value])=>({...parseInteractionKey(key),value}))
+      .find(e=>e.source===next.target && e.side===side && !chain.includes(e.target)) : null;
+    if(third) chain.push(third.target);
+
+    const labels=chain.map(id=>MARKET_STATE_LABELS[id]||id);
+    const action=side==='buy'?'покупка':'продажа';
+    let text=`${action}: ${labels.join(' → ')}`;
+    if(retreatAvg>.20) text+=' → ликвидность истончается';
+    if(cascadeAvg>.42) text+=` · каскад ${(cascadeAvg*100).toFixed(0)}%`;
+
+    const driver = informedAvg>panicAvg && informedAvg>chaseAvg
+      ? 'ведёт высвобождение прибыльных позиций'
+      : panicAvg>chaseAvg
+        ? 'ведёт реакция убыточных и свежих позиций'
+        : chaseAvg>.20
+          ? 'ведёт реактивное подключение нового спроса'
+          : 'каскад слабый';
+
+    return {text,driver,cascadeAvg,cascadeMax,retreatAvg,informedAvg,panicAvg,chaseAvg};
+  }
+
+  function formatOverallInteractionRead(simMeta){
+    const ids=Array.from({length:simMeta?.length||0},(_,i)=>i);
+    const summary=summarizeInteractionChain({ids},simMeta||[]);
+    return `${summary.text}. ${summary.driver}.`;
+  }
+
+  function formatDynamicCohortRead(simMeta){
+    const flows={};
+    const finals={};
+    let finalCount=0;
+    for(const meta of simMeta||[]){
+      for(const [key,v] of Object.entries(meta.cohortFlows||{})) flows[key]=(flows[key]||0)+v;
+      for(const c of meta.finalCohorts||[]){
+        const key=`${c.stateId}:${c.cohortId}`;
+        const acc=finals[key] ||= {pnl:0,inventoryRatio:0,cashRatio:0,soldFraction:0,n:0,stateLabel:c.stateLabel,cohortLabel:c.cohortLabel};
+        acc.pnl+=c.pnl; acc.inventoryRatio+=c.inventoryRatio; acc.cashRatio+=c.cashRatio; acc.soldFraction+=c.soldFraction; acc.n++;
+        finalCount++;
+      }
+    }
+    const ordered=Object.entries(flows).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
+    const seller=ordered.filter(([,v])=>v<0)[0];
+    const buyer=ordered.filter(([,v])=>v>0)[0];
+
+    const avgFinal=Object.entries(finals).map(([key,a])=>({
+      key,
+      stateLabel:a.stateLabel,
+      cohortLabel:a.cohortLabel,
+      pnl:a.pnl/Math.max(1,a.n),
+      inventoryRatio:a.inventoryRatio/Math.max(1,a.n),
+      cashRatio:a.cashRatio/Math.max(1,a.n),
+      soldFraction:a.soldFraction/Math.max(1,a.n)
+    }));
+    const trapped=avgFinal.sort((a,b)=>(b.inventoryRatio*Math.max(0,-b.pnl))-(a.inventoryRatio*Math.max(0,-a.pnl)))[0];
+
+    const fmtKey=key=>{
+      const [p,c]=key.split(':');
+      return `${MARKET_STATE_LABELS[p]||p} · ${COHORT_BEHAVIOR[c]?.label||c}`;
     };
+    const parts=[];
+    if(seller) parts.push(`главную разгрузку чаще создают ${fmtKey(seller[0])}`);
+    if(buyer) parts.push(`спрос чаще поддерживают ${fmtKey(buyer[0])}`);
+    if(trapped && trapped.pnl<-.025) parts.push(`сильнее всего зажаты в убытке ${trapped.stateLabel} · ${trapped.cohortLabel} (${formatSignedPct(trapped.pnl)})`);
+    return parts.length ? parts.join('; ')+'.' : 'выраженного лидера среди когорт нет.';
   }
 
   function pathToCandles(path, desiredCount, wickBoost=1){
@@ -1064,8 +2145,8 @@
 
     if(max>.06 && min<-.06){
       return tMax<tMin
-        ? `Сначала втягивание толпы в спрос, затем разгрузка и возврат ликвидности; ${endTxt}.`
-        : `Сначала продавливание цены и выбивание слабых, затем реактивный откуп; ${endTxt}.`;
+        ? `Сначала усиливается реактивный спрос, затем прибыльные позиции начинают фиксироваться; ${endTxt}.`
+        : `Сначала выход из убыточных позиций усиливает предложение, затем свободный капитал частично поглощает поток; ${endTxt}.`;
     }
     if(end>.06){
       return tMin>.15 && tMin<.7
@@ -1074,8 +2155,8 @@
     }
     if(end<-.06){
       return tMax>.15 && tMax<.7
-        ? `Спрос не удерживает импульс, начинается разгрузка и смещение к продавцу; ${endTxt}.`
-        : `Предложение доминирует, растёт стресс участников и давление вниз; ${endTxt}.`;
+        ? `Свежий спрос не компенсирует высвобождение позиций, баланс реакции смещается к продаже; ${endTxt}.`
+        : `Предложение доминирует, растёт стресс убыточных позиций и давление вниз; ${endTxt}.`;
     }
     return `Потоки близки к балансу, рынок остаётся в широкой зоне неопределённости; ${endTxt}.`;
   }
@@ -1125,31 +2206,74 @@
     for(let i=1;i<6;i++){ const y=(h/6)*i; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
     for(let i=1;i<10;i++){ const x=(w/10)*i; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
     if(!lastResult) return;
+
     const {historyCandles, activeCandles, ghostCandles, active}=getScenarioVisuals();
-    const left=24, right=w-24, historyRatio=0.58, splitX=left+(right-left)*historyRatio;
-    const lows=[...historyCandles.map(c=>c.l), ...activeCandles.map(c=>c.l)], highs=[...historyCandles.map(c=>c.h), ...activeCandles.map(c=>c.h)];
+    const left=24, axisW=Math.max(62, Math.min(92, w*.11)), right=w-axisW, historyRatio=0.58, splitX=left+(right-left)*historyRatio;
+    const lows=[...historyCandles.map(c=>c.l), ...activeCandles.map(c=>c.l), ...ghostCandles.map(c=>c.l)], highs=[...historyCandles.map(c=>c.h), ...activeCandles.map(c=>c.h), ...ghostCandles.map(c=>c.h)];
     let lo=Math.min(...lows), hi=Math.max(...highs); const pad=(hi-lo)*0.12 || 0.08; lo-=pad; hi+=pad;
-    const yMap=p=>h-24-(p-lo)/(hi-lo)*(h-48);
+    const topPad=34, bottomPad=24;
+    const yMap=p=>h-bottomPad-(p-lo)/(hi-lo)*(h-topPad-bottomPad);
+    const invY=y=> lo + ((h-bottomPad-y)/(h-topPad-bottomPad))*(hi-lo);
+
     ctx.save(); ctx.strokeStyle=COLORS.marker; ctx.setLineDash([5,6]); ctx.beginPath(); ctx.moveTo(splitX,18); ctx.lineTo(splitX,h-18); ctx.stroke(); ctx.restore();
     drawCandles(historyCandles,left,splitX,{up:COLORS.histUp,down:COLORS.histDown,wickUp:COLORS.histUp,wickDown:COLORS.histDown},yMap);
     drawCandles(ghostCandles,splitX,right,{up:COLORS.ghostUp,down:COLORS.ghostDown,wickUp:COLORS.ghostUp,wickDown:COLORS.ghostDown},yMap);
     drawCandles(activeCandles,splitX,right,{up:COLORS.up,down:COLORS.down,wickUp:COLORS.up,wickDown:COLORS.down},yMap);
+
     const anchorY=activeCandles.length ? yMap(activeCandles[0].o) : yMap(1);
     ctx.fillStyle=COLORS.current; ctx.beginPath(); ctx.arc(splitX,anchorY,4,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle=COLORS.text; ctx.font="11px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText(`HISTORY · ${lastResult.displayBase.tfLabel}`,24,18);
-    ctx.fillText("PROJECTED CANDLES",splitX+12,18);
-    ctx.fillText(`ACTIVE: ${selectedModel===0?'A':'B'} ${(active.prob*100).toFixed(1)}%`, right-145,18);
+
+    const currentPrice=getCurrentPrice();
+    const currentY=yMap(1);
+    ctx.save();
+    ctx.strokeStyle='rgba(210,216,226,.34)';
+    ctx.setLineDash([4,5]);
+    ctx.beginPath(); ctx.moveTo(left,currentY); ctx.lineTo(right,currentY); ctx.stroke();
+    ctx.restore();
+
+    ctx.font="11px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.textBaseline='middle';
+    for(let i=0;i<=5;i++){
+      const y=topPad + ((h-topPad-bottomPad)/5)*i;
+      const normalized=invY(y);
+      const label=currentPrice
+        ? formatPrice(currentPrice*normalized)
+        : `${((normalized-1)*100)>=0?'+':''}${((normalized-1)*100).toFixed(1)}%`;
+      ctx.strokeStyle=COLORS.marker; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(right+4,y); ctx.lineTo(right+10,y); ctx.stroke();
+      ctx.fillStyle=COLORS.text; ctx.textAlign='left'; ctx.fillText(label, right+14, y);
+    }
+
+    const currentLabel=currentPrice ? formatPrice(currentPrice) : '0.0%';
+    const currentBoxW=Math.max(48,ctx.measureText(currentLabel).width+14);
+    ctx.fillStyle='rgba(238,241,246,.94)';
+    ctx.fillRect(right+5,currentY-11,currentBoxW,22);
+    ctx.fillStyle='#090b0f';
+    ctx.textAlign='center';
+    ctx.fillText(currentLabel,right+5+currentBoxW/2,currentY+0.5);
+
+    function pill(text, x, y, align='left'){
+      ctx.font="11px ui-monospace, SFMono-Regular, Menlo, monospace";
+      const padX=8, boxH=22, tw=ctx.measureText(text).width, boxW=tw + padX*2;
+      const bx=align==='right' ? x-boxW : x;
+      ctx.fillStyle='rgba(8,10,14,.86)';
+      ctx.strokeStyle=COLORS.marker; ctx.lineWidth=1;
+      ctx.fillRect(bx, y, boxW, boxH); ctx.strokeRect(bx, y, boxW, boxH);
+      ctx.fillStyle=COLORS.text; ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillText(text, bx+padX, y+boxH/2+0.5);
+    }
+
+    pill(`ИСТОРИЯ · ${lastResult.displayBase.tfLabel}`, left, 10, 'left');
+    pill('ПРОДОЛЖЕНИЕ СВЕЧЕЙ', right-6, 10, 'right');
+    pill(`АКТИВНАЯ МОДЕЛЬ: ${selectedModel===0?'A':'B'} · ${(active.prob*100).toFixed(1)}%`, right-6, 36, 'right');
   }
 
   function updateMetrics(visual, confidence){
     const pct=x=>(x*100).toFixed(1)+"%";
     const bias=visual.pressureBias;
-    els.mMomentum.textContent=bias>.10 ? `BUY ${pct(bias)}` : bias<-.10 ? `SELL ${pct(Math.abs(bias))}` : 'BALANCED';
+    els.mMomentum.textContent=bias>.10 ? `покупатель ${pct(bias)}` : bias<-.10 ? `продавец ${pct(Math.abs(bias))}` : 'баланс';
     els.mVol.textContent=pct(clamp(visual.crowdStress,0,1));
-    els.mAccel.textContent=pct(clamp(visual.liquidityFragility,0,1));
+    els.mAccel.textContent=pct(clamp(visual.liquidityBufferFragility,0,1));
     els.mDraw.textContent=pct(clamp(visual.distributionRisk,0,1));
-    els.confidence.textContent=`confidence ${(confidence*100).toFixed(0)}%`;
+    els.confidence.textContent=`уверенность ${(confidence*100).toFixed(0)}%`;
   }
 
   function setSelectedModel(index){
@@ -1167,35 +2291,61 @@
     els.analyzeBtn.disabled=true; els.status.textContent="распознавание"; els.empty.classList.add("hidden");
     try{
       const recog=await recognizeAll(files);
-      els.recognition.textContent=`распознавание ${(recog.confidence*100).toFixed(0)}% · candles ${(recog.candleScore*100).toFixed(0)}%`;
-      els.timeframeState.textContent=`TF ${recog.tfSummary || recog.displayBase.tfLabel}`;
+      els.recognition.textContent=`распознавание ${(recog.confidence*100).toFixed(0)}% · свечи ${(recog.candleScore*100).toFixed(0)}%`;
+      els.timeframeState.textContent=`ТФ ${recog.tfSummary || recog.displayBase.tfLabel}`;
       updateMetrics(recog.visual, recog.confidence);
       els.status.textContent="симуляция";
       await new Promise(r=>requestAnimationFrame(r));
       const simulations=Number(els.simulations.value), horizon=Number(els.horizon.value), profile=els.marketProfile.value;
-      const participantStates=buildParticipantStates(profile,recog.visual,recog.regimes);
-      renderParticipantMap(participantStates);
-      const simResult=runSimulations(recog.visual, recog.regimes, participantStates, profile, simulations, horizon);
+      const baseParticipantStates=buildMarketStateBuckets(profile,recog.visual,recog.regimes);
+      const cohortStates=buildStateCohorts(baseParticipantStates, recog.regimes, recog.visual);
+      const marketStateBuckets=mergeStateCohorts(baseParticipantStates, cohortStates);
+      renderMarketStateMap(marketStateBuckets);
+      const simResult=await runSimulations(recog.visual, recog.regimes, marketStateBuckets, profile, simulations, horizon);
       const paths=simResult.paths;
       const clusters=clusterTwo(paths);
-      const driverA=summarizeClusterDriver(clusters[0],simResult.simMeta);
-      const driverB=summarizeClusterDriver(clusters[1],simResult.simMeta);
+      const driverA=summarizeClusterDriver(clusters[0],simResult.simMeta,cohortStates);
+      const driverB=summarizeClusterDriver(clusters[1],simResult.simMeta,cohortStates);
+      const cascadeA=summarizeInteractionChain(clusters[0],simResult.simMeta);
+      const cascadeB=summarizeInteractionChain(clusters[1],simResult.simMeta);
+      const transitionAll=summarizeTransitions(simResult.simMeta.map((_,i)=>i),simResult.simMeta);
+      const transitionA=summarizeTransitions(clusters[0].ids,simResult.simMeta);
+      const transitionB=summarizeTransitions(clusters[1].ids,simResult.simMeta);
+      const memoryAll=summarizeMarketMemory(simResult.simMeta.map((_,i)=>i),simResult.simMeta);
+      const memoryA=summarizeMarketMemory(clusters[0].ids,simResult.simMeta);
+      const memoryB=summarizeMarketMemory(clusters[1].ids,simResult.simMeta);
+      const reserveAll=summarizePressureReserves(simResult.simMeta.map((_,i)=>i),simResult.simMeta);
+      const reserveA=summarizePressureReserves(clusters[0].ids,simResult.simMeta);
+      const reserveB=summarizePressureReserves(clusters[1].ids,simResult.simMeta);
       const dataConfidence=clamp((recog.confidence*0.44)+(recog.candleScore*0.14),0,.59);
-      lastResult={...recog, ...simResult, participantStates, paths, clusters, drivers:[driverA,driverB], confidence:dataConfidence};
+      lastResult={...recog, ...simResult, marketStateBuckets, cohortStates, paths, clusters, drivers:[driverA,driverB], cascades:[cascadeA,cascadeB], transitions:[transitionA,transitionB], transitionAll, memorySummaries:[memoryA,memoryB], memoryAll, reserveSummaries:[reserveA,reserveB], reserveAll, confidence:dataConfidence, anchorPrice:getCurrentPrice()};
       els.probA.textContent=(clusters[0].prob*100).toFixed(1)+"%";
       els.probB.textContent=(clusters[1].prob*100).toFixed(1)+"%";
       els.descA.textContent=describeScenario(clusters[0].path);
       els.descB.textContent=describeScenario(clusters[1].path);
-      if(els.driverA) els.driverA.textContent=`Источник следующей волны: ${driverA.text}`;
-      if(els.driverB) els.driverB.textContent=`Источник следующей волны: ${driverB.text}`;
-      if(els.regimeRead) els.regimeRead.innerHTML=`<b>Поведенческий режим:</b> ${formatRegimeRead(recog.regimes)}`;
-      if(els.participantRead) els.participantRead.innerHTML=`<b>Участники:</b> ${formatParticipantRead(simResult.flowSummary)}`;
-      els.confidence.textContent=`confidence ${(dataConfidence*100).toFixed(0)}%`;
-      els.status.textContent=`готово · ${simulations.toLocaleString('ru-RU')} sims`;
+      if(els.driverA) els.driverA.textContent=`Основной механизм: ${driverA.text}`;
+      if(els.driverB) els.driverB.textContent=`Основной механизм: ${driverB.text}`;
+      if(els.cascadeA) els.cascadeA.textContent=`Реакция рынка: ${cascadeA.text}`;
+      if(els.cascadeB) els.cascadeB.textContent=`Реакция рынка: ${cascadeB.text}`;
+      if(els.transitionA) els.transitionA.textContent=`Переход состояния: ${transitionA.text}`;
+      if(els.transitionB) els.transitionB.textContent=`Переход состояния: ${transitionB.text}`;
+      if(els.memoryA) els.memoryA.textContent=`Память сценария: ${memoryA.text}`;
+      if(els.memoryB) els.memoryB.textContent=`Память сценария: ${memoryB.text}`;
+      if(els.memoryRead) els.memoryRead.innerHTML=`<b>Память рынка:</b> ${memoryAll.text}<br><span>${memoryAll.detail}</span>`;
+      renderPressureReserves(reserveAll);
+      if(els.reserveA) els.reserveA.textContent=`Запасы давления: ${reserveA.text}. ${reserveA.detail}`;
+      if(els.reserveB) els.reserveB.textContent=`Запасы давления: ${reserveB.text}. ${reserveB.detail}`;
+      renderTransitionStrip(els.transitionGlobal,transitionAll);
+      if(els.regimeRead) els.regimeRead.innerHTML=`<b>Режим реакции:</b> ${formatRegimeRead(recog.regimes)}`;
+      if(els.marketStateRead) els.marketStateRead.innerHTML=`<b>Состояние капитала:</b> ${formatMarketStateRead(simResult.flowSummary)}`;
+      if(els.cohortRead) els.cohortRead.innerHTML=`<b>Динамика состояний:</b> ${formatDynamicCohortRead(simResult.simMeta)}`;
+      if(els.interactionRead) els.interactionRead.innerHTML=`<b>Реакция рынка:</b> ${formatOverallInteractionRead(simResult.simMeta)}`;
+      els.confidence.textContent=`уверенность ${(dataConfidence*100).toFixed(0)}%`;
+      els.status.textContent=`готово · ${simulations.toLocaleString('ru-RU')} симуляций`;
       setSelectedModel(0); draw();
     } catch(err){
       console.error(err);
-      els.status.textContent="ошибка"; els.recognition.textContent="распознавание не удалось"; els.timeframeState.textContent="TF —";
+      els.status.textContent="ошибка"; els.recognition.textContent="распознавание не удалось"; els.timeframeState.textContent="ТФ —";
       els.empty.classList.remove("hidden"); els.empty.textContent=err.message || "Ошибка анализа изображения.";
     } finally { els.analyzeBtn.disabled=!files.length; }
   }
@@ -1239,14 +2389,31 @@
   }
 
   function reset(){
-    files=[]; lastResult=null; els.files.value=""; els.empty.classList.remove('hidden'); els.empty.textContent='Загрузите хотя бы один скриншот графика.';
-    els.status.textContent='ожидание'; els.recognition.textContent='распознавание —'; els.timeframeState.textContent='TF —'; els.confidence.textContent='confidence —';
+    files=[]; lastResult=null; els.files.value=""; if(els.currentPrice) els.currentPrice.value=''; updatePriceMode(); els.empty.classList.remove('hidden'); els.empty.textContent='Загрузите хотя бы один скриншот графика.';
+    els.status.textContent='ожидание'; els.recognition.textContent='распознавание —'; els.timeframeState.textContent='ТФ —'; els.confidence.textContent='уверенность —';
     ['mMomentum','mVol','mAccel','mDraw','probA','probB'].forEach(id=>$(id).textContent='—'); els.descA.textContent='—'; els.descB.textContent='—';
-    if(els.regimeRead) els.regimeRead.innerHTML='<b>Поведенческий режим:</b> —';
-    if(els.participantRead) els.participantRead.innerHTML='<b>Участники:</b> —';
-    if(els.participantMap) els.participantMap.innerHTML='';
-    if(els.driverA) els.driverA.textContent='Источник следующей волны: —';
-    if(els.driverB) els.driverB.textContent='Источник следующей волны: —';
+    if(els.regimeRead) els.regimeRead.innerHTML='<b>Режим реакции:</b> —';
+    if(els.marketStateRead) els.marketStateRead.innerHTML='<b>Состояние капитала:</b> —';
+    if(els.cohortRead) els.cohortRead.innerHTML='<b>Динамика состояний:</b> —';
+    if(els.interactionRead) els.interactionRead.innerHTML='<b>Реакция рынка:</b> —';
+    if(els.marketStateMap) els.marketStateMap.innerHTML='';
+    if(els.driverA) els.driverA.textContent='Основной механизм: —';
+    if(els.driverB) els.driverB.textContent='Основной механизм: —';
+    if(els.cascadeA) els.cascadeA.textContent='Реакция рынка: —';
+    if(els.cascadeB) els.cascadeB.textContent='Реакция рынка: —';
+    if(els.transitionA) els.transitionA.textContent='Переход состояния: —';
+    if(els.transitionB) els.transitionB.textContent='Переход состояния: —';
+    if(els.memoryRead) els.memoryRead.innerHTML='<b>Память рынка:</b> —';
+    if(els.memoryA) els.memoryA.textContent='Память сценария: —';
+    if(els.memoryB) els.memoryB.textContent='Память сценария: —';
+    if(els.reserveA) els.reserveA.textContent='Запасы давления: —';
+    if(els.reserveB) els.reserveB.textContent='Запасы давления: —';
+    if(els.supplyReserveValue) els.supplyReserveValue.textContent='—';
+    if(els.demandReserveValue) els.demandReserveValue.textContent='—';
+    if(els.supplyReserveBar) els.supplyReserveBar.style.width='0%';
+    if(els.demandReserveBar) els.demandReserveBar.style.width='0%';
+    if(els.reserveDetail) els.reserveDetail.textContent='—';
+    if(els.transitionGlobal) renderTransitionStrip(els.transitionGlobal,{before:'—',beforeDetail:'—',event:'—',eventDetail:'—',after:'—',afterDetail:'—'});
     setSelectedModel(0); renderThumbs(); draw();
   }
 
@@ -1255,10 +2422,13 @@
   ['dragleave','drop'].forEach(ev=>els.dropzone.addEventListener(ev,e=>{ e.preventDefault(); els.dropzone.classList.remove('drag'); }));
   els.dropzone.addEventListener('drop',e=>addFiles(e.dataTransfer.files));
   els.analyzeBtn.addEventListener('click',analyze); els.resetBtn.addEventListener('click',reset);
-  els.simulations.addEventListener('input',()=>els.simValue.textContent=els.simulations.value);
+  els.simulations.addEventListener('input',()=>{ els.simValue.textContent=els.simulations.value; updateSimulationHint(); });
   els.horizon.addEventListener('input',()=>els.horizonValue.textContent=els.horizon.value);
+  if(els.currentPrice) els.currentPrice.addEventListener('input',updatePriceMode);
   els.showModelA.addEventListener('click',()=>setSelectedModel(0)); els.showModelB.addEventListener('click',()=>setSelectedModel(1));
   els.focusA.addEventListener('click',()=>setSelectedModel(0)); els.focusB.addEventListener('click',()=>setSelectedModel(1));
   window.addEventListener('resize',()=>requestAnimationFrame(draw));
+  updateSimulationHint();
+  updatePriceMode();
   draw();
 })();
