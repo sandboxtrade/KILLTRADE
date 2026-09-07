@@ -28,6 +28,8 @@
     probB: $("probB"),
     descA: $("descA"),
     descB: $("descB"),
+    scenarioMapA: $("scenarioMapA"),
+    scenarioMapB: $("scenarioMapB"),
     showModelA: $("showModelA"),
     showModelB: $("showModelB"),
     focusA: $("focusA"),
@@ -76,6 +78,7 @@
   // It is used only to make the first projected candles connect naturally to history.
   const ENGINE_BEHAVIOR_WEIGHT = 0.95;
   const ENGINE_CONTINUITY_WEIGHT = 0.05;
+  const INTRABAR_MICRO_STEPS = 4;
 
   const TIMEFRAMES = [
     { id: "auto", label: "авто", rank: 0 },
@@ -253,15 +256,15 @@
 
   const COLORS = {
     bg: "#05070a",
-    grid: "#11151c",
+    grid: "#111823",
     marker: "#2a313b",
-    up: "#9fbea9",
-    down: "#bc959c",
-    histUp: "rgba(238,241,246,.96)",
-    histDown: "rgba(134,143,158,.92)",
-    ghostUp: "rgba(159,190,169,.18)",
-    ghostDown: "rgba(188,149,156,.18)",
-    text: "#768091",
+    up: "#2ee681",
+    down: "#ff5a6c",
+    histUp: "#39e38b",
+    histDown: "#ff5f70",
+    ghostUp: "rgba(57,227,139,.24)",
+    ghostDown: "rgba(255,95,112,.24)",
+    text: "#8c97aa",
     current: "#f4f6fb"
   };
 
@@ -356,7 +359,7 @@
     c.width=w; c.height=h;
     const cctx=c.getContext('2d',{willReadFrequently:true});
     cctx.drawImage(img,0,0,w,h);
-    return { w,h,data:cctx.getImageData(0,0,w,h).data };
+    return { w,h,data:cctx.getImageData(0,0,w,h).data, canvas:c };
   }
 
   function estimateBounds(dataObj){
@@ -452,6 +455,96 @@
     return out;
   }
 
+  function extractColoredCandles(bounds){
+    const {w,data,bg,x0,x1,y0,y1}=bounds;
+    const classify=(x,y)=>{
+      const i=(y*w+x)*4;
+      const r=data[i], g=data[i+1], b=data[i+2];
+      const lum=(r+g+b)/3;
+      const dr=r-bg[0], dg=g-bg[1], db=b-bg[2];
+      const green = g > r + 18 && g > b + 8 && dg > 26 && lum > 42;
+      const red = r > g + 18 && r > b + 8 && dr > 26 && lum > 42;
+      return green ? 1 : (red ? -1 : 0);
+    };
+
+    const counts=[];
+    for(let x=Math.floor(x0); x<=Math.floor(x1); x++){
+      let count=0;
+      for(let y=y0; y<y1; y++) if(classify(x,y)!==0) count++;
+      counts.push(count);
+    }
+    const nonZero=counts.filter(v=>v>0);
+    if(nonZero.length<18) return {candles:[], confidence:0};
+
+    const baseTh=Math.max(2, Math.floor(quantile(nonZero,.32)*0.45));
+    const raw=[];
+    let run=null;
+    for(let i=0;i<counts.length;i++){
+      if(counts[i] >= baseTh){ if(!run) run={start:i,end:i}; else run.end=i; }
+      else if(run){ raw.push(run); run=null; }
+    }
+    if(run) raw.push(run);
+
+    let segments=raw.filter(s => (s.end-s.start+1)>=1 && (s.end-s.start+1)<=42);
+    const narrowWidths=segments.map(s=>s.end-s.start+1).filter(w=>w<=16);
+    const typicalWidth=Math.max(2, narrowWidths.length ? quantile(narrowWidths,.50) : 5);
+    const splitSegments=[];
+    for(const s of segments){
+      const width=s.end-s.start+1;
+      if(width <= typicalWidth*2.80){ splitSegments.push(s); continue; }
+      const n=clamp(Math.round(width/Math.max(2,typicalWidth+1)),2,2);
+      for(let k=0;k<n;k++){
+        const a=Math.round(s.start + k*width/n);
+        const b=Math.round(s.start + (k+1)*width/n)-1;
+        if(b>=a) splitSegments.push({start:a,end:b});
+      }
+    }
+    segments=splitSegments;
+    const candles=[];
+    for(const s of segments){
+      const startX=Math.floor(x0+s.start), endX=Math.floor(x0+s.end);
+      const width=Math.max(1,endX-startX+1);
+      const points=[];
+      let signScore=0;
+      for(let x=startX; x<=endX; x++){
+        for(let y=y0; y<y1; y++){
+          const side=classify(x,y);
+          if(!side) continue;
+          points.push({x,y,side});
+          signScore += side;
+        }
+      }
+      if(points.length<6) continue;
+      const dominant=signScore>=0 ? 1 : -1;
+      const own=points.filter(p=>p.side===dominant);
+      if(own.length<5) continue;
+      const ys=own.map(p=>p.y);
+      const rowCounts={};
+      for(const pt of own) rowCounts[pt.y]=(rowCounts[pt.y]||0)+1;
+      let bodyRows=Object.entries(rowCounts).filter(([,count])=>count>=Math.max(2,Math.ceil(width*0.55))).map(([y])=>Number(y));
+      if(bodyRows.length<2) bodyRows=Object.entries(rowCounts).filter(([,count])=>count>=Math.max(2,Math.ceil(width*0.35))).map(([y])=>Number(y));
+      if(bodyRows.length<1) continue;
+      const highY=Math.min(...ys), lowY=Math.max(...ys), topBody=Math.min(...bodyRows), bottomBody=Math.max(...bodyRows);
+      const high=-(highY-y0)/(y1-y0);
+      const low=-(lowY-y0)/(y1-y0);
+      const isUp=dominant>0;
+      const open=-( (isUp ? bottomBody : topBody) - y0)/(y1-y0);
+      const close=-( (isUp ? topBody : bottomBody) - y0)/(y1-y0);
+      candles.push({
+        o:open,
+        h:Math.max(high,open,close),
+        l:Math.min(low,open,close),
+        c:close
+      });
+    }
+
+    if(candles.length<10) return {candles:[], confidence:0};
+    const widths=segments.map(s=>s.end-s.start+1);
+    const regularity=1-clamp(std(widths)/Math.max(1,mean(widths))*0.45,0,1);
+    const confidence=clamp(0.56 + Math.min(candles.length,52)/88 + regularity*0.18,0,1);
+    return {candles, confidence};
+  }
+
   function extractCandles(bounds){
     const {x0,x1,y0,y1,contrastAt}=bounds;
     const counts=[];
@@ -521,11 +614,15 @@
     const dataObj=getImageData(img);
     const bounds=estimateBounds(dataObj);
     const line=extractPath(bounds);
-    const cand=extractCandles(bounds);
+    const rawCand=extractCandles(bounds);
+    const colorCand=extractColoredCandles(bounds);
+    const cand=(colorCand.candles.length && colorCand.confidence >= rawCand.confidence*0.80) ? colorCand : rawCand;
     const tf = item.tf === 'auto' ? inferTimeframe(item.file.name) : item.tf;
     const historyCandles = cand.candles.length ? normalizeCandles(cand.candles) : [];
     const path = historyCandles.length ? normalizePath(historyCandles.map(c=>c.c)) : line.path;
-    const confidence = Math.max(line.confidence*0.7, cand.confidence*0.95);
+    const confidence = Math.max(line.confidence*0.66, cand.confidence*0.98);
+    const rawLast=cand.candles?.[cand.candles.length-1];
+    const lastCloseFraction=rawLast ? clamp(-rawLast.c,0.06,0.94) : 0.52;
     return {
       name:item.file.name,
       tf,
@@ -536,7 +633,10 @@
       confidence,
       candles:historyCandles,
       sourceWidth:dataObj.w,
-      sourceHeight:dataObj.h
+      sourceHeight:dataObj.h,
+      previewCanvas:dataObj.canvas,
+      previewCrop:{x0:Math.round(dataObj.w*.025),x1:Math.round(dataObj.w*.89),y0:bounds.y0,y1:bounds.y1},
+      lastCloseFraction
     };
   }
 
@@ -610,19 +710,23 @@
     if(!s && !m && !l) return null;
     const visual={
       momentum: clamp((s.momentum*.50)+(m.momentum*.30)+(l.momentum*.20), -1, 1),
-      vol: clamp((s.vol*.55)+(m.vol*.30)+(l.vol*.15), 0, 1.5),
-      accel: clamp((s.accel*.55)+(m.accel*.30)+(l.accel*.15), -1, 1),
-      drawdown: clamp((s.drawdown*.25)+(m.drawdown*.35)+(l.drawdown*.40), 0, 1),
+      vol: clamp((s.vol*.50)+(m.vol*.30)+(l.vol*.20), 0, 1.5),
+      accel: clamp((s.accel*.54)+(m.accel*.28)+(l.accel*.18), -1, 1),
+      drawdown: clamp((s.drawdown*.42)+(m.drawdown*.33)+(l.drawdown*.25), 0, 1),
       persistence: clamp((s.persistence*.50)+(m.persistence*.30)+(l.persistence*.20), 0, 1),
-      compression: clamp((s.compression*.40)+(m.compression*.30)+(l.compression*.30), 0, 1),
+      compression: clamp((s.compression*.46)+(m.compression*.31)+(l.compression*.23), 0, 1),
       pressureBias: clamp((s.pressureBias*.50)+(m.pressureBias*.30)+(l.pressureBias*.20), -1, 1),
-      crowdStress: clamp((s.crowdStress*.55)+(m.crowdStress*.30)+(l.crowdStress*.15), 0, 1),
-      reflexivity: clamp((s.reflexivity*.50)+(m.reflexivity*.30)+(l.reflexivity*.20), 0, 1),
-      capitulationRisk: clamp((s.capitulationRisk*.25)+(m.capitulationRisk*.35)+(l.capitulationRisk*.40), 0, 1),
-      absorption: clamp((s.absorption*.45)+(m.absorption*.30)+(l.absorption*.25), 0, 1),
-      liquidityBufferFragility: clamp((s.liquidityBufferFragility*.45)+(m.liquidityBufferFragility*.30)+(l.liquidityBufferFragility*.25), 0, 1),
-      distributionRisk: clamp((s.distributionRisk*.30)+(m.distributionRisk*.35)+(l.distributionRisk*.35), 0, 1),
-      continuityTrace: clamp((s.continuityTrace*.70)+(m.continuityTrace*.22)+(l.continuityTrace*.08), -1, 1)
+      crowdStress: clamp((s.crowdStress*.48)+(m.crowdStress*.31)+(l.crowdStress*.21), 0, 1),
+      reflexivity: clamp((s.reflexivity*.48)+(m.reflexivity*.31)+(l.reflexivity*.21), 0, 1),
+      capitulationRisk: clamp((s.capitulationRisk*.42)+(m.capitulationRisk*.33)+(l.capitulationRisk*.25), 0, 1),
+      absorption: clamp((s.absorption*.46)+(m.absorption*.31)+(l.absorption*.23), 0, 1),
+      liquidityBufferFragility: clamp((s.liquidityBufferFragility*.44)+(m.liquidityBufferFragility*.32)+(l.liquidityBufferFragility*.24), 0, 1),
+      distributionRisk: clamp((s.distributionRisk*.44)+(m.distributionRisk*.32)+(l.distributionRisk*.24), 0, 1),
+      // only continuity stays mostly local because it exists solely to join the last visible candles smoothly.
+      continuityTrace: clamp((s.continuityTrace*.76)+(m.continuityTrace*.16)+(l.continuityTrace*.08), -1, 1),
+      localContext:s,
+      higherContext:m,
+      globalContext:l
     };
     return visual;
   }
@@ -977,28 +1081,30 @@
     if(!extracted.length) throw new Error("Не удалось выделить график ни на одном изображении.");
 
     const groups = {
+      m15: extracted.filter(e => e.tf === 'm15'),
       short: extracted.filter(e => e.tf === 'm5' || e.tf === 'm15'),
       mid: extracted.filter(e => e.tf === 'h1'),
       long: extracted.filter(e => e.tf === 'h4' || e.tf === 'd1')
     };
     const bestOf = arr => arr.sort((a,b)=>b.confidence-a.confidence)[0] || null;
-    const shortBest=bestOf([...groups.short]);
+    const m15Best=bestOf([...groups.m15]);
+    const shortBest=m15Best || bestOf([...groups.short]);
     const midBest=bestOf([...groups.mid]);
     const longBest=bestOf([...groups.long]);
 
     const shortState=shortBest ? deriveVisualState(shortBest.path) : null;
     const midState=midBest ? deriveVisualState(midBest.path) : null;
     const longState=longBest ? deriveVisualState(longBest.path) : null;
-    const visual=mergeStates(shortState, midState, longState) || deriveVisualState(bestOf([...extracted]).path);
+    const visual=mergeStates(shortState, midState, longState) || deriveVisualState((m15Best || bestOf([...extracted])).path);
 
-    const displayBase = bestOf([...(groups.short.length?groups.short:[]), ...(groups.mid.length?groups.mid:[]), ...(groups.long.length?groups.long:[])]) || extracted[0];
-    let displayCandles = displayBase.candles;
+    const displayBase = m15Best || shortBest || midBest || longBest || extracted[0];
+    let displayCandles = (displayBase.candles || []).slice(-36);
     if(!displayCandles.length){
-      const displayPath = resample(displayBase.path, 44);
-      displayCandles = pathToCandles(displayPath.map(v=>1+v*0.3), 42, 0.9).map(c=>( { o:c.o-1, h:c.h-1, l:c.l-1, c:c.c-1 }));
+      const displayPath = resample(displayBase.path, 48);
+      displayCandles = pathToCandles(displayPath.map(v=>1+v*0.3), 44, 0.72).map(c=>( { o:c.o-1, h:c.h-1, l:c.l-1, c:c.c-1 }));
     }
 
-    const tfSummary = [shortBest && `короткий:${shortBest.tfLabel}`, midBest && `средний:${midBest.tfLabel}`, longBest && `длинный:${longBest.tfLabel}`].filter(Boolean).join(' · ');
+    const tfSummary = [displayBase && `отрисовка:${displayBase.tfLabel}`, midBest && `контекст:${midBest.tfLabel}`, longBest && `глобально:${longBest.tfLabel}`].filter(Boolean).join(' · ');
     const confidence = mean(extracted.map(e=>e.confidence));
     const candleScore = mean(extracted.map(e=>e.candleConfidence));
     const regimes = inferBehaviorRegimes(visual);
@@ -1161,7 +1267,60 @@
     };
   }
 
-  function initMarket(profileName, visual, regimes, marketStateBuckets){
+  function createIntradaySequence(m, horizon){
+    const reserves=m.initialReserves || pressureReserveSnapshot(m);
+    const v=m.visual || {};
+    // Sign is not a technical signal: it is the current balance of available demand/supply
+    // combined with the multi-timeframe market-state context.
+    let primaryBias=clamp(reserves.balance*.54 + (v.pressureBias||0)*.30 + ((v.globalContext?.pressureBias)||0)*.16,-1,1);
+    if(Math.abs(primaryBias)<.06){
+      const regimeDir={accumulation:.25,fomo_chase:.55,distribution:-.48,panic_exit:-.62,absorption:.10,liquidity_vacuum:0,balance:0}[m.regime]||0;
+      primaryBias=clamp(primaryBias+regimeDir*.45+gauss()*.05,-1,1);
+    }
+    const primaryDir=primaryBias>=0 ? 1 : -1;
+    const stress=clamp((v.crowdStress||0)*.36 + (v.reflexivity||0)*.28 + (v.liquidityBufferFragility||0)*.22 + Math.abs(primaryBias)*.14,0,1);
+    const receivingResource=primaryDir<0 ? reserves.demandShare : reserves.supplyShare;
+    const counterProbability=clamp(.20 + stress*.30 + receivingResource*.24 + (v.absorption||0)*.16, .12, .82);
+    const hasCounter=Math.random()<counterProbability;
+    const counterDuration=hasCounter ? clamp(Math.round(2 + Math.random()*5),2,7) : 0;
+    const balanceDuration=clamp(Math.round(2 + (v.compression||0)*4 + Math.random()*4),2,8);
+    const counterStrength=clamp(.34 + stress*.30 + receivingResource*.22 + Math.random()*.18,.28,.92);
+    const releaseStrength=clamp(.38 + Math.abs(primaryBias)*.38 + stress*.18 + Math.random()*.12,.34,.96);
+    const balanceDamping=clamp(.34 + (v.absorption||0)*.22 + Math.random()*.14,.30,.66);
+    return {
+      primaryDir,
+      primaryBias,
+      hasCounter,
+      counterDuration,
+      balanceDuration,
+      counterStrength,
+      releaseStrength,
+      balanceDamping,
+      phaseOffset:Math.random()*Math.PI*2,
+      horizon
+    };
+  }
+
+  function intradayPhaseState(m, step, horizon){
+    const q=m.intradaySequence || createIntradaySequence(m,horizon);
+    const counterEnd=q.counterDuration;
+    const balanceEnd=counterEnd+q.balanceDuration;
+    if(q.hasCounter && step<counterEnd){
+      const t=(step+1)/Math.max(1,counterEnd);
+      const wave=Math.sin(Math.PI*t);
+      return {phase:'встречная реакция',pulse:-q.primaryDir*q.counterStrength*wave,holdBoost:.02,returnScale:.92};
+    }
+    if(step<balanceEnd){
+      const oscillation=Math.sin((step-counterEnd+1)*1.55+q.phaseOffset)*.10;
+      return {phase:'временный баланс',pulse:oscillation,holdBoost:.34,returnScale:q.balanceDamping};
+    }
+    const t=(step-balanceEnd+1)/Math.max(1,horizon-balanceEnd);
+    const ramp=.40+.60*(1-Math.exp(-t*3));
+    const pullback=Math.sin((step-balanceEnd)*1.28+q.phaseOffset)*.10*(1-t*.45);
+    return {phase:'реализация основного дисбаланса',pulse:q.primaryDir*q.releaseStrength*ramp + pullback,holdBoost:.04,returnScale:.88+.14*t};
+  }
+
+  function initMarket(profileName, visual, regimes, marketStateBuckets, horizon){
     const base=MARKET_STATE_PROFILES[profileName].map(p=>({...p}));
     const stateBy=Object.fromEntries((marketStateBuckets||[]).map(s=>[s.name,s]));
     const regime=sampleRegime(regimes);
@@ -1185,6 +1344,7 @@
       cascadeIntensity:0,
       maxCascadeIntensity:0,
       memory:createMarketMemory(),
+      stepReturnCap:profileName==="microcap" ? .060 : profileName==="midcap" ? .030 : .045,
       states:base.map(p=>{
         const st=stateBy[p.name] || {positionLoad:.5,pnl:0,buyUrgency:.5,sellUrgency:.5,cohorts:[]};
         const sourceCohorts=st.cohorts?.length ? st.cohorts : [
@@ -1231,6 +1391,7 @@
     };
     // Базовый запас нужен только как точка отсчёта для истощения в этой симуляции.
     market.initialReserves=pressureReserveSnapshot(market);
+    market.intradaySequence=createIntradaySequence(market,horizon||48);
     return market;
   }
 
@@ -1559,6 +1720,34 @@
     return {edges,normalized};
   }
 
+  function buildCausalCandle(openPrice, closePrice, context){
+    const o=finitePositive(openPrice,1), c=finitePositive(closePrice,o);
+    const ret=Math.log(c/o);
+    const dir=Math.sign(ret) || Math.sign(context.net||0) || 1;
+    const flowDir=Math.sign(context.net||0) || dir;
+    const imbalance=clamp(context.imbalance||0,0,1);
+    const stress=clamp(context.stress||0,0,1);
+    const liquidity=Math.max(.10,context.liquidity||1);
+    const phase=context.phase || 'реакция';
+    const flowAmp=clamp((Math.abs(context.net||0)/liquidity)*.010 + Math.abs(ret)*.34 + stress*.0045, .0012,.035);
+    const counterWeight=phase==='встречная реакция' ? 1.0 : phase==='временный баланс' ? .78 : .40;
+    const pushWeight=phase==='реализация основного дисбаланса' ? 1.0 : phase==='временный баланс' ? .58 : .72;
+    const n1=0.72+Math.random()*.46, n2=0.72+Math.random()*.46, n3=0.72+Math.random()*.46;
+    const p1=finitePositive(o*Math.exp(-flowDir*flowAmp*counterWeight*n1),o);
+    const baseMid=Math.sqrt(o*c);
+    const p2=finitePositive(baseMid*Math.exp(flowDir*flowAmp*pushWeight*n2 + dir*Math.abs(ret)*.18),baseMid);
+    const p3=finitePositive(c*Math.exp(-dir*flowAmp*(.22+.34*(1-imbalance))*n3),c);
+    const points=[o,p1,p2,p3,c];
+    const high=Math.max(...points), low=Math.min(...points);
+    const extra=flowAmp*(.18+.32*stress);
+    return {
+      o,
+      h:Math.max(high,Math.max(o,c)*Math.exp(extra*(.55+Math.random()*.45))),
+      l:Math.min(low,Math.min(o,c)*Math.exp(-extra*(.55+Math.random()*.45))),
+      c
+    };
+  }
+
   function stepMarket(m, step, horizon){
     let buyFlow=0,sellFlow=0,buyConsumption=0,sellConsumption=0;
     const groupFlows={};
@@ -1569,6 +1758,7 @@
     const fatigue=step/horizon;
     const regimeDef=BEHAVIOR_REGIMES[m.regime] || BEHAVIOR_REGIMES.balance;
     const memory=m.memory || (m.memory=createMarketMemory());
+    const phase=intradayPhaseState(m,step,horizon);
     const memoryBuySupport=clamp(memory.absorptionConfidence*(1-memory.capitalDepletion)*.70 + memory.buyPersistence*.34 - memory.failedDemand*.28, -.4, .8);
     const memorySellPressure=clamp(memory.sellPersistence*.46 + memory.stressMemory*.38 + memory.liquidityFatigue*.30 + memory.absorptionFatigue*.28, 0, 1.2);
     const reserveBefore=pressureReserveSnapshot(m);
@@ -1623,7 +1813,8 @@
           .24*memoryBuySupport -
           .14*memory.capitalDepletion -
           .16*memory.failedDemand +
-          .20*reserveDemandSupport -
+          .20*reserveDemandSupport +
+          .72*Math.max(0,phase.pulse) -
           .12*reserveSupplyPressure -
           .30*reserveBefore.demandExhaustion +
           .10*reserveBefore.supplyExhaustion +
@@ -1647,7 +1838,8 @@
           .34*exhaustedSeller +
           .22*memorySellPressure +
           .12*memory.failedDemand +
-          .20*reserveSupplyPressure -
+          .20*reserveSupplyPressure +
+          .72*Math.max(0,-phase.pulse) -
           .10*reserveDemandSupport -
           .28*reserveBefore.supplyExhaustion +
           .12*reserveBefore.demandExhaustion +
@@ -1692,7 +1884,7 @@
           sellScore += Math.max(0,crowdShock)*.62 + v.crowdStress*.10;
         }
 
-        const holdScore=.54 + cfg.patience*.34 + (1-p.aggression)*.20 + (1-v.reflexivity)*.08 + gauss()*.10;
+        const holdScore=.54 + cfg.patience*.34 + (1-p.aggression)*.20 + (1-v.reflexivity)*.08 + phase.holdBoost + gauss()*.10;
         const [pb,ph]=softmax3(buyScore,holdScore,sellScore);
         const r=Math.random();
         const side=r<pb ? 1 : (r<pb+ph ? 0 : -1);
@@ -1763,12 +1955,12 @@
     const reserveAfter=pressureReserveSnapshot(m);
     const receivingSideExhaustion=net<0 ? reserveAfter.demandExhaustion : reserveAfter.supplyExhaustion;
     const reserveImpactMultiplier=1 + receivingSideExhaustion*.34 + Math.abs(reserveAfter.balance)*.08;
-    const impactMagnitude=.020 * Math.pow(Math.abs(net)/Math.max(.10,m.liquidityBuffer),.58) * (1 + memory.liquidityFatigue*.18 + memory.absorptionFatigue*.12) * reserveImpactMultiplier;
-    const microNoise=gauss()*(.0021 + .0048*v.crowdStress + .0028*v.liquidityBufferFragility);
+    const impactMagnitude=.0062 * Math.pow(Math.abs(net)/Math.max(.10,m.liquidityBuffer),.58) * (1 + memory.liquidityFatigue*.18 + memory.absorptionFatigue*.12) * reserveImpactMultiplier;
+    const microNoise=gauss()*(.0015 + .0028*v.crowdStress + .0018*v.liquidityBufferFragility);
     const regimeDirection={accumulation:.18,fomo_chase:.62,distribution:-.50,panic_exit:-.76,absorption:.16,liquidity_vacuum:0,balance:0}[m.regime] || 0;
 
     const cascadeDirection=clamp(m.freshDemandStress - m.lossReactionStress - m.profitReleaseStress*.72,-1,1);
-    const behaviorRet=
+    const baseBehaviorRet=
       Math.sign(net||1)*impactMagnitude +
       microNoise +
       .0012*v.pressureBias*(.35+.65*m.attention) +
@@ -1777,6 +1969,7 @@
       .0011*cascadeDirection*m.cascadeIntensity +
       .0008*(memory.buyPersistence-memory.sellPersistence) -
       .0006*memory.failedDemand;
+    const behaviorRet=baseBehaviorRet*phase.returnScale + .0070*phase.pulse;
 
 
     // 5% только для визуальной непрерывности последних свечей; не создаёт сценарий сама по себе.
@@ -1784,11 +1977,14 @@
     const continuityRet=.034*v.continuityTrace*continuityFade;
 
     let ret=ENGINE_BEHAVIOR_WEIGHT*behaviorRet + ENGINE_CONTINUITY_WEIGHT*continuityRet;
-    ret=clamp(finite(ret,0),-.11,.11);
+    ret=clamp(finite(ret,0),-(m.stepReturnCap||.045),(m.stepReturnCap||.045));
 
     const previousPrice=finitePositive(m.price,1);
     const nextPrice=previousPrice*Math.exp(ret);
     m.price=finitePositive(nextPrice,previousPrice);
+    const causalCandle=buildCausalCandle(previousPrice,m.price,{
+      net,total,imbalance,stress,liquidity:m.liquidityBuffer,phase:phase.phase
+    });
     m.lastReturn=finite(ret,0);
     m.attention=clamp(
       m.attention + .15*Math.abs(ret) + .035*v.reflexivity + regimeDef.attention*.08 - .014*(m.attention-.45) + gauss()*.006,
@@ -1799,6 +1995,7 @@
     return {
       price:m.price,
       ret,
+      candle:causalCandle,
       groupFlows,
       cohortFlows,
       interactions:interactionUpdate.edges,
@@ -1811,6 +2008,8 @@
       grossFlow:total,
       buyFlow,
       sellFlow,
+      intradayPhase:phase.phase,
+      intradayPulse:phase.pulse,
       reserves:{
         before:reserveBefore,
         after:reserveAfter,
@@ -1832,12 +2031,14 @@
     const batch=100;
 
     for(let s=0;s<simulations;s++){
-      const m=initMarket(profile,visual,regimes,marketStateBuckets);
+      const m=initMarket(profile,visual,regimes,marketStateBuckets,horizon);
       const path=[1];
       const localFlows={};
       const localCohortFlows={};
       const localInteractions={};
       const localRegimes={};
+      const localIntradayPhases=[];
+      const localCandles=[];
       let cascadeSum=0;
       let retreatSum=0;
       let informedSum=0;
@@ -1853,6 +2054,8 @@
         localRegimes[m.regime]=(localRegimes[m.regime]||0)+1;
         const beforeState=systemStateSnapshot(m);
         const stepResult=stepMarket(m,t,horizon);
+        localIntradayPhases.push(stepResult.intradayPhase || 'реакция');
+        if(stepResult.candle && [stepResult.candle.o,stepResult.candle.h,stepResult.candle.l,stepResult.candle.c].every(Number.isFinite)) localCandles.push(stepResult.candle);
         if(!Number.isFinite(stepResult.price) || stepResult.price<=0){
           invalidStepCount++;
           const fallback=finitePositive(path[path.length-1],1);
@@ -1903,6 +2106,9 @@
         cohortFlows:localCohortFlows,
         interactions:localInteractions,
         regimes:localRegimes,
+        intradayPhases:localIntradayPhases,
+        candles:localCandles,
+        intradaySequence:{...(m.intradaySequence||{})},
         cascadeAvg:cascadeSum/Math.max(1,horizon),
         cascadeMax,
         liquidityRetreatAvg:retreatSum/Math.max(1,horizon),
@@ -1974,9 +2180,26 @@
 
   function pathFeatures(path){
     const clean=(path||[]).map((v,i)=>finitePositive(v,i?finitePositive(path[i-1],1):1));
-    const start=finitePositive(clean[0],1), end=finitePositive(clean[clean.length-1],start), max=Math.max(...clean), min=Math.min(...clean), mid=clean[Math.floor(clean.length*.5)], q1=clean[Math.floor(clean.length*.25)], q3=clean[Math.floor(clean.length*.75)];
+    const start=finitePositive(clean[0],1), end=finitePositive(clean[clean.length-1],start), max=Math.max(...clean), min=Math.min(...clean);
     const rets=clean.slice(1).map((v,i)=>Math.log(finitePositive(v,clean[i])/finitePositive(clean[i],1))).filter(Number.isFinite);
-    return [Math.log(end/start), Math.log(max/start), Math.log(min/start), Math.log(mid/start), Math.log(q1/start), Math.log(q3/start), std(rets)*6].map(v=>finite(v,0));
+    const signature=resample(clean.map(v=>Math.log(v/start)),10);
+    const maxIndex=clean.indexOf(max)/Math.max(1,clean.length-1);
+    const minIndex=clean.indexOf(min)/Math.max(1,clean.length-1);
+    let turns=0;
+    for(let i=2;i<clean.length;i++){
+      const a=Math.sign(clean[i-1]-clean[i-2]), b=Math.sign(clean[i]-clean[i-1]);
+      if(a && b && a!==b) turns++;
+    }
+    return [
+      Math.log(end/start)*1.25,
+      Math.log(max/start),
+      Math.log(min/start),
+      std(rets)*5,
+      maxIndex*.28,
+      minIndex*.28,
+      clamp(turns/Math.max(1,clean.length-2),0,1)*.35,
+      ...signature.map(v=>v*.72)
+    ].map(v=>finite(v,0));
   }
   function distance(a,b){ let s=0; for(let i=0;i<a.length;i++){ const d=a[i]-b[i]; s+=d*d; } return Math.sqrt(s); }
   function clusterTwo(paths){
@@ -2161,13 +2384,95 @@
     return parts.length ? parts.join('; ')+'.' : 'выраженного лидера среди когорт нет.';
   }
 
+  function seededNoise(seed){
+    const x=Math.sin(seed*12.9898 + 78.233) * 43758.5453123;
+    return x - Math.floor(x);
+  }
+  function signedNoise(seed){ return seededNoise(seed)*2 - 1; }
+
+  function phaseForStep(phases, stepIndex, totalSteps){
+    if(!phases?.length) return 'реакция';
+    if(phases.length===totalSteps) return phases[clamp(stepIndex,0,phases.length-1)] || 'реакция';
+    const idx=Math.round(stepIndex/Math.max(1,totalSteps-1) * Math.max(0,phases.length-1));
+    return phases[clamp(idx,0,phases.length-1)] || 'реакция';
+  }
+
+  function intrabarCandlesFromPath(path, phases, visual, wickBoost=1){
+    const clean=(path||[]).map((v,i)=>finitePositive(v,i?path[i-1]:1));
+    if(clean.length<2) return [];
+    const total=clean.length-1;
+    const overallDir=Math.sign(clean[clean.length-1]-clean[0]) || 1;
+    const volBias=(visual?.vol||0), reflex=(visual?.reflexivity||0), stress=(visual?.crowdStress||0);
+    const candles=[];
+
+    for(let i=0;i<total;i++){
+      const o=finitePositive(clean[i], i?clean[i-1]:1);
+      const c=finitePositive(clean[i+1], o);
+      const prev=i>0 ? finitePositive(clean[i-1],o) : o;
+      const next=i<total-1 ? finitePositive(clean[i+2],c) : c;
+      const phase=phaseForStep(phases,i,total);
+      const bodyRet=(c/o)-1;
+      const dir=Math.sign(bodyRet) || Math.sign(next-prev) || overallDir;
+      const absRet=Math.abs(bodyRet);
+      const seed=(i+1)*17.13 + o*31.7 + c*11.9;
+      const baseSwing=0.0016 + absRet*0.48 + volBias*0.0034 + reflex*0.0018;
+      const chop=phase==='временный баланс' ? (0.95 + stress*0.35) : (0.38 + reflex*0.22);
+      const fakeout=baseSwing * (phase==='встречная реакция' ? 1.18 : phase==='временный баланс' ? 0.92 : 0.68);
+      const continuation=baseSwing * (phase==='реализация основного дисбаланса' ? 0.86 : phase==='встречная реакция' ? 0.54 : 0.42);
+      const midpoint=(o+c)/2;
+
+      let points=[o];
+      if(phase==='временный баланс'){
+        const sideA=signedNoise(seed)*baseSwing*chop;
+        const sideB=signedNoise(seed+1.3)*baseSwing*chop*0.85;
+        const sideC=signedNoise(seed+2.6)*baseSwing*chop*0.72;
+        points.push(finitePositive(o*(1+sideA),o));
+        points.push(finitePositive(midpoint*(1+sideB), midpoint));
+        points.push(finitePositive(c*(1+sideC), c));
+      } else {
+        // сначала небольшой снос против закрытия, затем движение в сторону тела, затем локальная доработка
+        const p1=finitePositive(o*(1-dir*fakeout*(0.75 + seededNoise(seed+0.7)*0.35)),o);
+        const p2=finitePositive(midpoint*(1+dir*(absRet*0.55 + continuation)*(0.75 + seededNoise(seed+1.4)*0.35)), midpoint);
+        const p3=finitePositive(c*(1-dir*continuation*(0.24 + seededNoise(seed+2.1)*0.24)), c);
+        points.push(p1,p2,p3);
+      }
+      points.push(c);
+
+      // микрошаги внутри 15m свечи для более живого high/low
+      const expanded=[points[0]];
+      for(let m=1;m<points.length;m++){
+        const a=expanded[expanded.length-1], b=points[m];
+        for(let k=1;k<=INTRABAR_MICRO_STEPS;k++){
+          const t=k/INTRABAR_MICRO_STEPS;
+          const curve=(phase==='временный баланс')
+            ? (t + Math.sin(t*Math.PI)*signedNoise(seed+m+k)*0.06)
+            : (t + Math.sin(t*Math.PI)*0.045*dir*signedNoise(seed+m+k));
+          const value=finitePositive(a + (b-a)*curve, a);
+          expanded.push(value);
+        }
+      }
+
+      const localVol=std(expanded.slice(1).map((v,j)=>v-expanded[j])) || baseSwing;
+      const high=Math.max(...expanded, o, c);
+      const low=Math.min(...expanded, o, c);
+      const wick=Math.max(0.0012, (absRet*0.22 + localVol*0.62 + baseSwing*0.26) * wickBoost);
+      candles.push({
+        o,
+        h:Math.max(high, Math.max(o,c) + wick*(0.65 + seededNoise(seed+4.1)*0.45)),
+        l:Math.min(low, Math.min(o,c) - wick*(0.65 + seededNoise(seed+5.2)*0.45)),
+        c
+      });
+    }
+    return candles;
+  }
+
   function pathToCandles(path, desiredCount, wickBoost=1){
     if(!path || path.length<2) return [];
-    const count=clamp(Math.round(desiredCount || path.length/4), 12, 80);
-    const safePath=path.map((v,i)=>finitePositive(v,i?finitePositive(path[i-1],1):1));
-    const source=smooth(safePath,1).map((v,i)=>finitePositive(v,i?safePath[i-1]:1));
+    const sourceRaw=path.map((v,i)=>finitePositive(v,i?finitePositive(path[i-1],1):1));
+    const source=sourceRaw.map((v,i)=>finitePositive(v,i?sourceRaw[i-1]:1));
+    const count=clamp(Math.round(desiredCount || Math.min(source.length-1, 48)), 12, 96);
     const globalMoves=source.slice(1).map((v,i)=>v-source[i]);
-    const globalVol=std(globalMoves) || 0.0025;
+    const globalVol=std(globalMoves) || 0.0022;
     const candles=[];
     for(let i=0;i<count;i++){
       const a=Math.floor(i/count*(source.length-1));
@@ -2175,40 +2480,90 @@
       const segment=source.slice(a,b+1);
       if(segment.length<2) continue;
       const prevClose=candles.length ? candles[candles.length-1].c : segment[0];
-      const o=prevClose, c=segment[segment.length-1], rawHigh=Math.max(...segment,o,c), rawLow=Math.min(...segment,o,c);
+      const first=segment[0], last=segment[segment.length-1];
+      const rawHigh=Math.max(...segment, prevClose, first, last), rawLow=Math.min(...segment, prevClose, first, last);
+      const o=prevClose, c=last;
       const localMoves=segment.slice(1).map((v,j)=>v-segment[j]);
       const localVol=std(localMoves) || globalVol;
-      const body=Math.abs(c-o), noise=0.55 + 0.45*Math.abs(Math.sin(i*1.71 + 0.38));
-      const wick=Math.max(0.0025, (body*0.40 + localVol*1.35 + globalVol*0.50) * wickBoost * noise);
+      const body=Math.abs(c-o);
+      const wick=Math.max(0.0014, (body*0.26 + localVol*0.88 + globalVol*0.26) * wickBoost);
       candles.push({o,h:Math.max(rawHigh,Math.max(o,c)+wick),l:Math.min(rawLow,Math.min(o,c)-wick),c});
     }
     return candles;
   }
 
   function describeScenario(path){
-    const end=path[path.length-1]-1;
-    const max=Math.max(...path)-1;
-    const min=Math.min(...path)-1;
-    const tMax=path.indexOf(Math.max(...path))/path.length;
-    const tMin=path.indexOf(Math.min(...path))/path.length;
-    const endTxt=`финал ${end>=0?"+":""}${(end*100).toFixed(1)}%`;
+    const clean=(path||[]).map((v,i)=>finitePositive(v,i?path[i-1]:1));
+    if(clean.length<2) return '—';
+    const currentPrice=getCurrentPrice();
+    const rel=(v)=> currentPrice ? formatPrice(currentPrice*v) : `${v>=1?'+':''}${((v-1)*100).toFixed(1)}%`;
+    const pct=(v)=> `${v>=0?'+':''}${(v*100).toFixed(1)}%`;
+    const end=clean[clean.length-1]-1;
+    const maxVal=Math.max(...clean), minVal=Math.min(...clean);
+    const tMax=clean.indexOf(maxVal)/clean.length;
+    const tMin=clean.indexOf(minVal)/clean.length;
+    const endTxt=currentPrice ? `финал около ${rel(clean[clean.length-1])}` : `финал ${pct(end)}`;
+    const earlyEnd=Math.max(3,Math.floor(clean.length*.30));
+    const midStart=earlyEnd;
+    const midEnd=Math.max(midStart+2,Math.floor(clean.length*.58));
+    const early=clean.slice(0,earlyEnd);
+    const middle=clean.slice(midStart,midEnd);
+    const earlyMax=Math.max(...early), earlyMin=Math.min(...early);
+    const midRange=middle.length ? (Math.max(...middle)-Math.min(...middle))/Math.max(1e-6,mean(middle)) : 1;
+    const hasBalance=midRange < Math.max(.018,Math.abs(end)*.42);
 
-    if(max>.06 && min<-.06){
+    if(end < -0.025 && earlyMax > clean[0]*1.006){
+      return hasBalance
+        ? `Сценарий: вынос вверх к ${rel(earlyMax)} (${pct(earlyMax-1)}) → несколько свечей баланса → затем постепенное усиление предложения; ${endTxt}.`
+        : `Перед основным снижением возможен вынос вверх к ${rel(earlyMax)} (${pct(earlyMax-1)}), после чего предложение усиливается; ${endTxt}.`;
+    }
+    if(end > 0.025 && earlyMin < clean[0]*0.994){
+      return hasBalance
+        ? `Сценарий: сброс вниз к ${rel(earlyMin)} (${pct(earlyMin-1)}) → несколько свечей баланса → затем постепенное восстановление спроса; ${endTxt}.`
+        : `Перед продолжением роста возможен сброс вниз к ${rel(earlyMin)} (${pct(earlyMin-1)}), после чего спрос снова перехватывает поток; ${endTxt}.`;
+    }
+    if(maxVal>1.03 && minVal<0.97){
       return tMax<tMin
-        ? `Сначала усиливается реактивный спрос, затем прибыльные позиции начинают фиксироваться; ${endTxt}.`
-        : `Сначала выход из убыточных позиций усиливает предложение, затем свободный капитал частично поглощает поток; ${endTxt}.`;
+        ? `Сначала рынок даёт вынос вверх, затем давление смещается к продаже; ${endTxt}.`
+        : `Сначала идёт продавливание вниз, затем поток частично поглощается и рынок восстанавливается; ${endTxt}.`;
     }
-    if(end>.06){
-      return tMin>.15 && tMin<.7
-        ? `Краткий сброс предложения, после которого спрос снова перехватывает поток; ${endTxt}.`
-        : `Покупательский поток удерживает инициативу и толкает цену выше; ${endTxt}.`;
+    if(end>.03){
+      return `Спрос удерживает инициативу; внутридневная структура допускает продолжение роста к ${currentPrice ? rel(clean[clean.length-1]) : pct(end)}.`;
     }
-    if(end<-.06){
-      return tMax>.15 && tMax<.7
-        ? `Свежий спрос не компенсирует высвобождение позиций, баланс реакции смещается к продаже; ${endTxt}.`
-        : `Предложение доминирует, растёт стресс убыточных позиций и давление вниз; ${endTxt}.`;
+    if(end<-.03){
+      return `Предложение остаётся сильнее; внутридневная структура допускает продолжение снижения к ${currentPrice ? rel(clean[clean.length-1]) : pct(end)}.`;
     }
-    return `Потоки близки к балансу, рынок остаётся в широкой зоне неопределённости; ${endTxt}.`;
+    return `Рынок остаётся в смешанном внутридневном состоянии; возможна пилообразная отработка без явного преимущества сторон, ${endTxt}.`;
+  }
+
+  function scenarioStageMap(path, meta){
+    const clean=(path||[]).map((v,i)=>finitePositive(v,i?path[i-1]:1));
+    if(clean.length<4) return [];
+    const phases=phaseSegments(meta?.intradayPhases);
+    const currentPrice=getCurrentPrice();
+    const formatLevel=v=>currentPrice ? formatPrice(currentPrice*v) : `${v>=1?'+':''}${((v-1)*100).toFixed(1)}%`;
+    const result=[];
+    for(const seg of phases.slice(0,3)){
+      const a=clamp(seg.start,0,clean.length-1), b=clamp(seg.end,1,clean.length-1);
+      const slice=clean.slice(a,Math.max(a+1,b+1));
+      const high=Math.max(...slice), low=Math.min(...slice), end=slice[slice.length-1];
+      let detail='';
+      if(seg.name==='встречная реакция') detail=`диапазон ${formatLevel(low)} – ${formatLevel(high)}`;
+      else if(seg.name==='временный баланс') detail=`удержание около ${formatLevel(mean(slice))}`;
+      else detail=`смещение к ${formatLevel(end)}`;
+      result.push({title:shortPhaseLabel(seg.name),level:formatLevel(end),detail});
+    }
+    while(result.length<3){
+      const i=result.length, idx=Math.floor((i+1)/3*(clean.length-1));
+      result.push({title:i===0?'первая реакция':i===1?'баланс':'дальнейшее движение',level:formatLevel(clean[idx]),detail:'модельная фаза'});
+    }
+    return result.slice(0,3);
+  }
+
+  function renderScenarioMap(el, path, meta){
+    if(!el) return;
+    const stages=scenarioStageMap(path,meta);
+    el.innerHTML=stages.map((s,i)=>`<div class="scenario-step"><small>этап ${i+1}</small><b>${s.title}</b><span>${s.level} · ${s.detail}</span></div>`).join('');
   }
 
   function resizeCanvas(){
@@ -2223,9 +2578,10 @@
   function scaleHistoryCandles(candles, futureSpan){
     const clean=(candles||[]).filter(c=>c && [c.o,c.h,c.l,c.c].every(Number.isFinite));
     if(!clean.length) return [];
-    const all=[...clean.map(c=>c.h), ...clean.map(c=>c.l)], histRange=Math.max(1e-6, finite(Math.max(...all)-Math.min(...all),1));
-    const amp=clamp(finite(futureSpan,.20)*0.85, 0.18, 0.52);
-    return clean.map(c=>({o:1+c.o/histRange*amp, h:1+c.h/histRange*amp, l:1+c.l/histRange*amp, c:1+c.c/histRange*amp})).filter(c=>[c.o,c.h,c.l,c.c].every(Number.isFinite));
+    const tail=clean.slice(-36);
+    const all=[...tail.map(c=>c.h), ...tail.map(c=>c.l)], histRange=Math.max(1e-6, finite(Math.max(...all)-Math.min(...all),1));
+    const amp=clamp(finite(futureSpan,.20)*1.04, 0.24, 0.74);
+    return tail.map(c=>({o:1+c.o/histRange*amp, h:1+c.h/histRange*amp, l:1+c.l/histRange*amp, c:1+c.c/histRange*amp})).filter(c=>[c.o,c.h,c.l,c.c].every(Number.isFinite));
   }
 
   function drawCandles(candles,x0,x1,palette,yMap){
@@ -2249,9 +2605,38 @@
     const spanB=finite(Math.max(...clusterB.high.filter(Number.isFinite))-Math.min(...clusterB.low.filter(Number.isFinite)),.20);
     const futureSpan=Math.max(.02,spanA,spanB);
     const historyCandles=scaleHistoryCandles(lastResult.displayCandles, futureSpan);
-    const activeCandles=pathToCandles(active.path, 26, 1.0);
-    const ghostCandles=pathToCandles(ghost.path, 26, 0.9);
-    return {historyCandles, activeCandles, ghostCandles, active};
+    const activePath=active.path;
+    const ghostPath=ghost.path;
+    const activeMeta=lastResult.simMeta?.[active.medoid];
+    const ghostMeta=lastResult.simMeta?.[ghost.medoid];
+    const activeCandles=(activeMeta?.candles?.length===activePath.length-1)
+      ? activeMeta.candles
+      : intrabarCandlesFromPath(activePath, activeMeta?.intradayPhases, lastResult.visual, 0.82);
+    const ghostCandles=(ghostMeta?.candles?.length===ghostPath.length-1)
+      ? ghostMeta.candles
+      : intrabarCandlesFromPath(ghostPath, ghostMeta?.intradayPhases, lastResult.visual, 0.76);
+    return {historyCandles, activeCandles, ghostCandles, active, ghost, activePath, ghostPath, activeMeta, ghostMeta};
+  }
+
+  function phaseSegments(phases){
+    const arr=phases||[];
+    if(!arr.length) return [];
+    const out=[];
+    let start=0, current=arr[0];
+    for(let i=1;i<=arr.length;i++){
+      if(i===arr.length || arr[i]!==current){
+        out.push({name:current,start,end:i});
+        start=i; current=arr[i];
+      }
+    }
+    return out;
+  }
+
+  function shortPhaseLabel(name){
+    if(name==='встречная реакция') return 'встречная реакция';
+    if(name==='временный баланс') return 'баланс';
+    if(name==='реализация основного дисбаланса') return 'основной поток';
+    return name||'реакция';
   }
 
   function draw(){
@@ -2262,37 +2647,101 @@
     for(let i=1;i<10;i++){ const x=(w/10)*i; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
     if(!lastResult) return;
 
-    const {historyCandles, activeCandles, ghostCandles, active}=getScenarioVisuals();
-    const left=24, axisW=Math.max(62, Math.min(92, w*.11)), right=w-axisW, historyRatio=0.58, splitX=left+(right-left)*historyRatio;
-    const lows=[...historyCandles.map(c=>c.l), ...activeCandles.map(c=>c.l), ...ghostCandles.map(c=>c.l)], highs=[...historyCandles.map(c=>c.h), ...activeCandles.map(c=>c.h), ...ghostCandles.map(c=>c.h)];
-    const finiteLows=lows.filter(Number.isFinite), finiteHighs=highs.filter(Number.isFinite);
-    let lo=finiteLows.length?Math.min(...finiteLows):.80, hi=finiteHighs.length?Math.max(...finiteHighs):1.20;
-    if(!Number.isFinite(lo)||!Number.isFinite(hi)||hi<=lo){ lo=.80; hi=1.20; }
-    const pad=Math.max(.01,(hi-lo)*0.12); lo-=pad; hi+=pad;
-    const topPad=34, bottomPad=24;
-    const yMap=p=>h-bottomPad-(finite(p,1)-lo)/(hi-lo)*(h-topPad-bottomPad);
-    const invY=y=> finite(lo + ((h-bottomPad-y)/(h-topPad-bottomPad))*(hi-lo),1);
+    const {historyCandles, activeCandles, ghostCandles, active, activeMeta}=getScenarioVisuals();
+    const left=18, axisW=Math.max(64, Math.min(92, w*.11)), right=w-axisW, historyRatio=0.50, splitX=left+(right-left)*historyRatio;
+    const topPad=78, bottomPad=24, plotBottom=h-bottomPad;
+    const preview=lastResult.displayBase?.previewCanvas;
+    const crop=lastResult.displayBase?.previewCrop;
+    const previewUsable=!!(preview && crop && crop.x1>crop.x0 && crop.y1>crop.y0);
 
-    ctx.save(); ctx.strokeStyle=COLORS.marker; ctx.setLineDash([5,6]); ctx.beginPath(); ctx.moveTo(splitX,18); ctx.lineTo(splitX,h-18); ctx.stroke(); ctx.restore();
-    drawCandles(historyCandles,left,splitX,{up:COLORS.histUp,down:COLORS.histDown,wickUp:COLORS.histUp,wickDown:COLORS.histDown},yMap);
+    let currentY;
+    if(previewUsable){
+      const frac=clamp(lastResult.displayBase.lastCloseFraction ?? .52,.06,.94);
+      currentY=topPad + frac*(plotBottom-topPad);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(left,topPad,Math.max(1,splitX-left),Math.max(1,plotBottom-topPad)); ctx.clip();
+      ctx.drawImage(
+        preview,
+        crop.x0,crop.y0,Math.max(1,crop.x1-crop.x0),Math.max(1,crop.y1-crop.y0),
+        left,topPad,Math.max(1,splitX-left),Math.max(1,plotBottom-topPad)
+      );
+      // лёгкое затемнение делает исходный скрин и прогноз визуально одной сценой
+      ctx.fillStyle='rgba(3,5,8,.10)'; ctx.fillRect(left,topPad,splitX-left,plotBottom-topPad);
+      ctx.restore();
+    }
+
+    const futureLows=[1,...activeCandles.map(c=>c.l),...ghostCandles.map(c=>c.l)].filter(Number.isFinite);
+    const futureHighs=[1,...activeCandles.map(c=>c.h),...ghostCandles.map(c=>c.h)].filter(Number.isFinite);
+    let fLo=Math.min(...futureLows), fHi=Math.max(...futureHighs);
+    if(!Number.isFinite(fLo)||!Number.isFinite(fHi)||fHi<=fLo){ fLo=.92; fHi=1.08; }
+    const rawRange=Math.max(.012,fHi-fLo);
+    fLo-=rawRange*.10; fHi+=rawRange*.10;
+
+    if(!Number.isFinite(currentY)) currentY=topPad+(plotBottom-topPad)*.50;
+    currentY=clamp(currentY,topPad+18,plotBottom-18);
+    const upSpan=Math.max(.001,fHi-1), downSpan=Math.max(.001,1-fLo);
+    const upScale=(currentY-topPad)/upSpan;
+    const downScale=(plotBottom-currentY)/downSpan;
+    let pxPerUnit=Math.min(upScale,downScale)*.92;
+    if(!Number.isFinite(pxPerUnit)||pxPerUnit<=0) pxPerUnit=(plotBottom-topPad)/Math.max(.02,fHi-fLo)*.82;
+    const yMap=p=>currentY-(finite(p,1)-1)*pxPerUnit;
+    const invY=y=>finite(1+(currentY-y)/pxPerUnit,1);
+
+    if(!previewUsable){
+      drawCandles(historyCandles,left,splitX,{up:COLORS.histUp,down:COLORS.histDown,wickUp:COLORS.histUp,wickDown:COLORS.histDown},yMap);
+    }
+
+    // будущее всегда рисуется по собственной 15m шкале и начинается точно от текущего состояния
     drawCandles(ghostCandles,splitX,right,{up:COLORS.ghostUp,down:COLORS.ghostDown,wickUp:COLORS.ghostUp,wickDown:COLORS.ghostDown},yMap);
     drawCandles(activeCandles,splitX,right,{up:COLORS.up,down:COLORS.down,wickUp:COLORS.up,wickDown:COLORS.down},yMap);
 
-    const anchorY=activeCandles.length ? yMap(activeCandles[0].o) : yMap(1);
-    ctx.fillStyle=COLORS.current; ctx.beginPath(); ctx.arc(splitX,anchorY,4,0,Math.PI*2); ctx.fill();
+    ctx.save();
+    ctx.strokeStyle=COLORS.marker; ctx.setLineDash([5,6]);
+    ctx.beginPath(); ctx.moveTo(splitX,topPad-10); ctx.lineTo(splitX,plotBottom); ctx.stroke();
+    // мягкий переход между оригинальным скрином и прогнозом
+    const grad=ctx.createLinearGradient(splitX-20,0,splitX+18,0);
+    grad.addColorStop(0,'rgba(5,7,10,0)'); grad.addColorStop(.55,'rgba(5,7,10,.55)'); grad.addColorStop(1,'rgba(5,7,10,0)');
+    ctx.fillStyle=grad; ctx.fillRect(splitX-20,topPad,38,plotBottom-topPad);
+    ctx.restore();
+
+    const phases=phaseSegments(activeMeta?.intradayPhases);
+    if(phases.length){
+      const futureW=right-splitX;
+      const total=Math.max(1,activeMeta.intradayPhases.length);
+      ctx.save();
+      ctx.font="9px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.textBaseline='top';
+      for(const seg of phases){
+        const sx=splitX + futureW*(seg.start/total);
+        const ex=splitX + futureW*(seg.end/total);
+        if(seg.start>0){
+          ctx.strokeStyle='rgba(108,120,139,.24)';
+          ctx.setLineDash([2,4]);
+          ctx.beginPath(); ctx.moveTo(sx,topPad); ctx.lineTo(sx,plotBottom); ctx.stroke();
+        }
+        if(ex-sx>44){
+          ctx.setLineDash([]);
+          ctx.fillStyle='rgba(158,168,185,.78)';
+          ctx.textAlign='center';
+          ctx.fillText(shortPhaseLabel(seg.name), (sx+ex)/2, topPad-16);
+        }
+      }
+      ctx.restore();
+    }
+
+    ctx.fillStyle=COLORS.current; ctx.beginPath(); ctx.arc(splitX,currentY,4,0,Math.PI*2); ctx.fill();
 
     const currentPrice=getCurrentPrice();
-    const currentY=yMap(1);
     ctx.save();
-    ctx.strokeStyle='rgba(210,216,226,.34)';
+    ctx.strokeStyle='rgba(220,226,236,.36)';
     ctx.setLineDash([4,5]);
-    ctx.beginPath(); ctx.moveTo(left,currentY); ctx.lineTo(right,currentY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(Math.max(left,splitX-14),currentY); ctx.lineTo(right,currentY); ctx.stroke();
     ctx.restore();
 
     ctx.font="11px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline='middle';
     for(let i=0;i<=5;i++){
-      const y=topPad + ((h-topPad-bottomPad)/5)*i;
+      const y=topPad + ((plotBottom-topPad)/5)*i;
       const normalized=invY(y);
       const label=currentPrice
         ? formatPrice(currentPrice*normalized)
@@ -2303,7 +2752,7 @@
 
     const currentLabel=currentPrice ? formatPrice(currentPrice) : '0.0%';
     const currentBoxW=Math.max(48,ctx.measureText(currentLabel).width+14);
-    ctx.fillStyle='rgba(238,241,246,.94)';
+    ctx.fillStyle='rgba(238,241,246,.96)';
     ctx.fillRect(right+5,currentY-11,currentBoxW,22);
     ctx.fillStyle='#090b0f';
     ctx.textAlign='center';
@@ -2313,14 +2762,14 @@
       ctx.font="11px ui-monospace, SFMono-Regular, Menlo, monospace";
       const padX=8, boxH=22, tw=ctx.measureText(text).width, boxW=tw + padX*2;
       const bx=align==='right' ? x-boxW : x;
-      ctx.fillStyle='rgba(8,10,14,.86)';
+      ctx.fillStyle='rgba(8,10,14,.90)';
       ctx.strokeStyle=COLORS.marker; ctx.lineWidth=1;
       ctx.fillRect(bx, y, boxW, boxH); ctx.strokeRect(bx, y, boxW, boxH);
       ctx.fillStyle=COLORS.text; ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillText(text, bx+padX, y+boxH/2+0.5);
     }
 
-    pill(`ИСТОРИЯ · ${lastResult.displayBase.tfLabel}`, left, 10, 'left');
-    pill('ПРОДОЛЖЕНИЕ СВЕЧЕЙ', right-6, 10, 'right');
+    pill(`ИСТОРИЯ · ${lastResult.displayBase.tfLabel}${previewUsable?' · оригинал':''}`, left, 10, 'left');
+    pill('ПРОГНОЗ · 15m СВЕЧИ', right-6, 10, 'right');
     pill(`АКТИВНАЯ МОДЕЛЬ: ${selectedModel===0?'A':'B'} · ${(active.prob*100).toFixed(1)}%`, right-6, 36, 'right');
   }
 
@@ -2387,6 +2836,8 @@
       els.probB.textContent=(clusters[1].prob*100).toFixed(1)+"%";
       els.descA.textContent=describeScenario(clusters[0].path);
       els.descB.textContent=describeScenario(clusters[1].path);
+      renderScenarioMap(els.scenarioMapA,clusters[0].path,simResult.simMeta?.[clusters[0].medoid]);
+      renderScenarioMap(els.scenarioMapB,clusters[1].path,simResult.simMeta?.[clusters[1].medoid]);
       if(els.driverA) els.driverA.textContent=`Основной механизм: ${driverA.text}`;
       if(els.driverB) els.driverB.textContent=`Основной механизм: ${driverB.text}`;
       if(els.cascadeA) els.cascadeA.textContent=`Реакция рынка: ${cascadeA.text}`;
@@ -2461,7 +2912,7 @@
   function reset(){
     files=[]; lastResult=null; els.files.value=""; if(els.currentPrice) els.currentPrice.value=''; updatePriceMode(); els.empty.classList.remove('hidden'); els.empty.textContent='Загрузите хотя бы один скриншот графика.';
     els.status.textContent='ожидание'; els.recognition.textContent='распознавание —'; els.timeframeState.textContent='ТФ —'; els.confidence.textContent='уверенность —';
-    ['mMomentum','mVol','mAccel','mDraw','probA','probB'].forEach(id=>$(id).textContent='—'); els.descA.textContent='—'; els.descB.textContent='—';
+    ['mMomentum','mVol','mAccel','mDraw','probA','probB'].forEach(id=>$(id).textContent='—'); els.descA.textContent='—'; els.descB.textContent='—'; if(els.scenarioMapA) els.scenarioMapA.innerHTML=''; if(els.scenarioMapB) els.scenarioMapB.innerHTML='';
     if(els.regimeRead) els.regimeRead.innerHTML='<b>Режим реакции:</b> —';
     if(els.marketStateRead) els.marketStateRead.innerHTML='<b>Состояние капитала:</b> —';
     if(els.cohortRead) els.cohortRead.innerHTML='<b>Динамика состояний:</b> —';
@@ -2493,12 +2944,14 @@
   els.dropzone.addEventListener('drop',e=>addFiles(e.dataTransfer.files));
   els.analyzeBtn.addEventListener('click',analyze); els.resetBtn.addEventListener('click',reset);
   els.simulations.addEventListener('input',()=>{ els.simValue.textContent=els.simulations.value; updateSimulationHint(); });
-  els.horizon.addEventListener('input',()=>els.horizonValue.textContent=els.horizon.value);
+  const updateHorizonLabel=()=>{ const n=Number(els.horizon.value); const hours=n/4; els.horizonValue.textContent=`${n} свечей · ${Number.isInteger(hours)?hours:hours.toFixed(1)}ч`; };
+  els.horizon.addEventListener('input',updateHorizonLabel);
   if(els.currentPrice) els.currentPrice.addEventListener('input',updatePriceMode);
   els.showModelA.addEventListener('click',()=>setSelectedModel(0)); els.showModelB.addEventListener('click',()=>setSelectedModel(1));
   els.focusA.addEventListener('click',()=>setSelectedModel(0)); els.focusB.addEventListener('click',()=>setSelectedModel(1));
   window.addEventListener('resize',()=>requestAnimationFrame(draw));
   updateSimulationHint();
+  updateHorizonLabel();
   updatePriceMode();
   draw();
 })();

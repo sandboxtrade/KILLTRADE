@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#090b0f" />
-  <title>Индикатор Лжи — Engine v1.8.2</title>
+  <title>Индикатор Лжи — Engine v1.12</title>
   <style>
     :root{
       --bg:#090b0f;
@@ -421,6 +421,12 @@
     .p-wave.buy{color:#dbe4df}
     .p-wave.sell{color:#cbb4b8}
     .scenario-driver{margin-top:8px;color:#7f8999;font-size:10px;line-height:1.45}
+    .scenario-map{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}
+    .scenario-step{min-width:0;padding:8px 9px;border:1px solid var(--line);border-radius:10px;background:#0a0d12}
+    .scenario-step small{display:block;color:#677184;font-size:8px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
+    .scenario-step b{display:block;color:#e9edf4;font-size:10px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .scenario-step span{display:block;margin-top:4px;color:#8993a4;font-size:9px;line-height:1.3}
+    @media(max-width:560px){.scenario-map{grid-template-columns:1fr}}
     .scenario-cascade{margin-top:6px;color:#aab2c1;font-size:10px;line-height:1.5;border-top:1px solid var(--line);padding-top:7px}
     .transition-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding:0 2px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.10em}
     .transition-strip{display:grid;grid-template-columns:1fr auto 1.15fr auto 1fr;gap:8px;align-items:stretch;margin-top:8px}
@@ -493,9 +499,9 @@
     <div class="topbar">
       <div class="brand">
         <h1>ИНДИКАТОР ЛЖИ</h1>
-        <p>v1.8.2: исправлена ошибка NaN в симуляции и добавлен полноэкранный прогресс анализа. Движок по-прежнему строится на состоянии рынка и причинных переходах, а не на фигурах и паттернах.</p>
+        <p>v1.12: история на графике по возможности берётся прямо из загруженного 15m-скрина, а OHLC будущих свечей формируется внутри самой симуляции из потока, ликвидности и реакции рынка. Для моделей добавлена поэтапная карта сценария.</p>
       </div>
-      <div class="badge">ENGINE v1.8.2</div>
+      <div class="badge">ENGINE v1.12</div>
     </div>
 
     <section class="grid">
@@ -521,8 +527,9 @@
             </div>
 
             <div class="field">
-              <label><span>Горизонт продолжения</span><b id="horizonValue">90</b></label>
-              <input id="horizon" type="range" min="30" max="180" step="10" value="90">
+              <label><span>Горизонт 15m-сценария</span><b id="horizonValue">48 свечей · 12ч</b></label>
+              <input id="horizon" type="range" min="16" max="64" step="4" value="48">
+              <div class="slider-hint">Каждый шаг будущего = одна 15-минутная свеча. H1/H4/D1 используются как контекст, но не меняют таймфрейм отрисовки.</div>
             </div>
 
             <div class="field">
@@ -646,6 +653,7 @@
                   <span id="probA" class="prob">—</span>
                 </div>
                 <p id="descA">—</p>
+                <div id="scenarioMapA" class="scenario-map"></div>
                 <div id="driverA" class="scenario-driver">Основной механизм: —</div>
                 <div id="cascadeA" class="scenario-cascade">Реакция рынка: —</div>
                 <div id="transitionA" class="scenario-transition">Переход состояния: —</div>
@@ -660,6 +668,7 @@
                   <span id="probB" class="prob">—</span>
                 </div>
                 <p id="descB">—</p>
+                <div id="scenarioMapB" class="scenario-map"></div>
                 <div id="driverB" class="scenario-driver">Основной механизм: —</div>
                 <div id="cascadeB" class="scenario-cascade">Реакция рынка: —</div>
                 <div id="transitionB" class="scenario-transition">Переход состояния: —</div>
