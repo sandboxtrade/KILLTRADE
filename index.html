@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#090b0f" />
-  <title>Индикатор Лжи — Engine v1.12</title>
+  <title>Индикатор Лжи — Engine v1.13</title>
   <style>
     :root{
       --bg:#090b0f;
@@ -421,7 +421,7 @@
     .p-wave.buy{color:#dbe4df}
     .p-wave.sell{color:#cbb4b8}
     .scenario-driver{margin-top:8px;color:#7f8999;font-size:10px;line-height:1.45}
-    .scenario-map{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}
+    .scenario-map{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:10px}
     .scenario-step{min-width:0;padding:8px 9px;border:1px solid var(--line);border-radius:10px;background:#0a0d12}
     .scenario-step small{display:block;color:#677184;font-size:8px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
     .scenario-step b{display:block;color:#e9edf4;font-size:10px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -499,9 +499,9 @@
     <div class="topbar">
       <div class="brand">
         <h1>ИНДИКАТОР ЛЖИ</h1>
-        <p>v1.12: история на графике по возможности берётся прямо из загруженного 15m-скрина, а OHLC будущих свечей формируется внутри самой симуляции из потока, ликвидности и реакции рынка. Для моделей добавлена поэтапная карта сценария.</p>
+        <p>v1.13: переработана генерация самого графика — прогноз ограничивается реалистичным внутридневным диапазоном, основное движение может делать паузы и локальные откаты, история 15m отображается без искажения пропорций, а на графике показывается только выбранная модель.</p>
       </div>
-      <div class="badge">ENGINE v1.12</div>
+      <div class="badge">ENGINE v1.13</div>
     </div>
 
     <section class="grid">
