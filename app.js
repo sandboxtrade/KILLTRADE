@@ -831,6 +831,76 @@
     return {medianRange,p75Range,p90Range,medianBody,jumpSigma,burstRate,reversalRate,avgStreak,volatilityScale,burstScale,reversionScale};
   }
 
+  function structureStatsFromSeries(series){
+    const clean=(series||[]).filter(Number.isFinite);
+    if(clean.length<3){
+      return {directionalEfficiency:.62,roughness:.38,swingCount:2,avgSwingLength:3,medianSwingAmplitude:.18,medianRetracement:.30,maxRetracement:.45,turnRate:.28};
+    }
+    const deltas=clean.slice(1).map((v,i)=>v-clean[i]);
+    const absD=deltas.map(Math.abs);
+    const totalTravel=Math.max(1e-9,absD.reduce((a,b)=>a+b,0));
+    const range=Math.max(1e-9,Math.max(...clean)-Math.min(...clean));
+    const noiseFloor=Math.max(quantile(absD,.28)*.34,range*.0065,1e-9);
+    const segments=[];
+    let current=null;
+    for(let i=0;i<deltas.length;i++){
+      const d=deltas[i];
+      let sign=Math.abs(d)>=noiseFloor ? Math.sign(d) : 0;
+      if(!sign){
+        if(current){ current.move+=d; current.length+=1; current.end=i+1; }
+        continue;
+      }
+      if(!current || current.dir!==sign){
+        if(current) segments.push(current);
+        current={dir:sign,move:d,length:1,start:i,end:i+1};
+      } else {
+        current.move+=d; current.length+=1; current.end=i+1;
+      }
+    }
+    if(current) segments.push(current);
+    const net=clean[clean.length-1]-clean[0];
+    const globalDir=Math.sign(net)||1;
+    const amplitudes=segments.map(s=>Math.abs(s.move)/range);
+    const retr=[];
+    let lastPrimaryMove=null;
+    for(const s of segments){
+      if(s.dir===globalDir){
+        lastPrimaryMove=Math.max(Math.abs(s.move),noiseFloor);
+      } else if(lastPrimaryMove){
+        retr.push(Math.abs(s.move)/lastPrimaryMove);
+      }
+    }
+    const directionalEfficiency=clamp(Math.abs(net)/totalTravel,0,1);
+    const swingCount=Math.max(1,segments.length);
+    const avgSwingLength=mean(segments.map(s=>s.length))||2;
+    const medianSwingAmplitude=quantile(amplitudes,.50)||.12;
+    const medianRetracement=clamp(retr.length?quantile(retr,.50):.28,.05,1.35);
+    const maxRetracement=clamp(retr.length?Math.max(...retr):.45,.08,1.8);
+    const turnRate=clamp((swingCount-1)/Math.max(1,deltas.length-1),0,1);
+    return {
+      directionalEfficiency,
+      roughness:clamp(1-directionalEfficiency,0,1),
+      swingCount,
+      avgSwingLength:clamp(avgSwingLength,1,12),
+      medianSwingAmplitude:clamp(medianSwingAmplitude,.02,1.2),
+      medianRetracement,
+      maxRetracement,
+      turnRate
+    };
+  }
+
+  function deriveHistoryPathStructure(candles){
+    const closes=(candles||[]).filter(c=>c&&Number.isFinite(c.c)).map(c=>c.c);
+    const stats=structureStatsFromSeries(closes);
+    return {
+      ...stats,
+      targetEfficiency:clamp(stats.directionalEfficiency,.24,.78),
+      targetSwingLength:clamp(stats.avgSwingLength,2,7),
+      targetRetracement:clamp(stats.medianRetracement,.16,.82),
+      waveStrength:clamp(.72 + stats.roughness*.70 + stats.turnRate*.45,.72,1.62)
+    };
+  }
+
   function pathVolatilityStats(path){
     const clean=(path||[]).map((v,i)=>finitePositive(v,i?finitePositive(path[i-1],1):1));
     const rets=clean.slice(1).map((v,i)=>Math.log(finitePositive(v,clean[i])/finitePositive(clean[i],1))).filter(Number.isFinite);
@@ -854,13 +924,20 @@
       }
     }
     if(currentStreak) streaks.push(currentStreak);
+    const structure=structureStatsFromSeries(clean.map(v=>Math.log(v/clean[0])));
     return {
       realizedVol:std(rets),
       p90Abs:quantile(absRets,.90),
       maxAbs:Math.max(...absRets),
       burstRate:absRets.filter(v=>v>=threshold).length/Math.max(1,absRets.length),
       signFlipRate:flips/Math.max(1,rets.length-1),
-      avgStreak:mean(streaks)||1
+      avgStreak:mean(streaks)||1,
+      directionalEfficiency:structure.directionalEfficiency,
+      swingCount:structure.swingCount,
+      avgSwingLength:structure.avgSwingLength,
+      medianSwingAmplitude:structure.medianSwingAmplitude,
+      medianRetracement:structure.medianRetracement,
+      maxRetracement:structure.maxRetracement
     };
   }
 
@@ -1360,6 +1437,7 @@
     if(displayBase.tf==='m5') displayCandles=aggregateCandles(displayCandles,3);
     displayCandles=reconstructContinuousCandles(displayCandles).slice(-40);
     visual.historyVolatility=deriveHistoryVolatility(displayCandles);
+    visual.historyStructure=deriveHistoryPathStructure(displayCandles);
 
     const used=[];
     for(const tf of ['m5','m15','h1','h4','d1']) if(byTf[tf].length) used.push(`${TF_META[tf].label}×${byTf[tf].length}`);
@@ -1530,73 +1608,203 @@
   function createIntradaySequence(m, horizon){
     const reserves=m.initialReserves || pressureReserveSnapshot(m);
     const v=m.visual || {};
-    // Основное направление — только медленный поведенческий bias. Оно не должно красить каждую свечу в один цвет.
-    let primaryBias=clamp(reserves.balance*.52 + (v.pressureBias||0)*.30 + ((v.globalContext?.pressureBias)||0)*.18,-1,1);
-    if(Math.abs(primaryBias)<.06){
+    let primaryBias=clamp(reserves.balance*.50 + (v.pressureBias||0)*.31 + ((v.globalContext?.pressureBias)||0)*.19,-1,1);
+    if(Math.abs(primaryBias)<.055){
       const regimeDir={accumulation:.25,fomo_chase:.55,distribution:-.48,panic_exit:-.62,absorption:.10,liquidity_vacuum:0,balance:0}[m.regime]||0;
-      primaryBias=clamp(primaryBias+regimeDir*.38+gauss()*.05,-1,1);
+      primaryBias=clamp(primaryBias+regimeDir*.34+gauss()*.035,-1,1);
     }
-    const primaryDir=primaryBias>=0 ? 1 : -1;
-    const stress=clamp((v.crowdStress||0)*.36 + (v.reflexivity||0)*.28 + (v.liquidityBufferFragility||0)*.22 + Math.abs(primaryBias)*.14,0,1);
-    const receivingResource=primaryDir<0 ? reserves.demandShare : reserves.supplyShare;
-    const counterProbability=clamp(.24 + stress*.28 + receivingResource*.22 + (v.absorption||0)*.16, .16, .82);
-    const hasCounter=rand()<counterProbability;
-    const counterDuration=hasCounter ? clamp(Math.round(2 + rand()*5),2,7) : 0;
-    const balanceDuration=clamp(Math.round(3 + (v.compression||0)*4 + rand()*4),3,9);
-    const counterStrength=clamp(.26 + stress*.25 + receivingResource*.18 + rand()*.16,.22,.74);
-    const releaseStrength=clamp(.26 + Math.abs(primaryBias)*.30 + stress*.15 + rand()*.10,.24,.68);
-    const balanceDamping=clamp(.40 + (v.absorption||0)*.20 + rand()*.14,.36,.68);
-    const minimumAfterBalance=counterDuration+balanceDuration+5;
-    const pauseStart=clamp(Math.round(horizon*(.48 + rand()*.22)), minimumAfterBalance, Math.max(minimumAfterBalance,horizon-6));
-    const pauseDuration=horizon>=28 ? clamp(Math.round(2 + rand()*5),2,6) : 0;
-    const pauseStrength=clamp(.10 + (v.absorption||0)*.16 + rand()*.10,.08,.30);
     return {
-      primaryDir,
+      primaryDir:primaryBias>=0?1:-1,
       primaryBias,
-      hasCounter,
-      counterDuration,
-      balanceDuration,
-      counterStrength,
-      releaseStrength,
-      balanceDamping,
-      pauseStart,
-      pauseDuration,
-      pauseStrength,
-      phaseOffset:rand()*Math.PI*2,
-      microOffset:rand()*Math.PI*2,
+      baseStrength:clamp(.34 + Math.abs(primaryBias)*.34 + (v.crowdStress||0)*.12 + (v.reflexivity||0)*.10,.28,.82),
       horizon
     };
   }
 
-  function intradayPhaseState(m, step, horizon){
+  function swingDuration(m, mode){
+    const hs=m.visual?.historyStructure || deriveHistoryPathStructure([]);
+    let base=hs.targetSwingLength||3;
+    if(mode==='absorption') base=2.1;
+    else if(mode==='balance') base=Math.max(2,base*.62);
+    else if(mode==='counterflow') base=Math.max(2,base*.82);
+    else if(mode==='release') base=Math.max(2,base*.92);
+    const jitter=.72+rand()*.62;
+    return clamp(Math.round(base*jitter),2,mode==='impulse'?8:7);
+  }
+
+  function createSwingState(m, horizon){
     const q=m.intradaySequence || createIntradaySequence(m,horizon);
-    const counterEnd=q.counterDuration;
-    const balanceEnd=counterEnd+q.balanceDuration;
-    const pauseEnd=(q.pauseStart||0)+(q.pauseDuration||0);
-    if(q.hasCounter && step<counterEnd){
-      const t=(step+1)/Math.max(1,counterEnd);
-      const wave=Math.sin(Math.PI*t);
-      const micro=Math.sin((step+1)*2.15+q.microOffset)*.13;
-      return {phase:'встречная реакция',pulse:-q.primaryDir*q.counterStrength*wave+micro,holdBoost:.05,returnScale:.80};
+    const hs=m.visual?.historyStructure || deriveHistoryPathStructure([]);
+    const counterStartProb=clamp(.08 + hs.roughness*.20 + (m.visual?.absorption||0)*.10,.06,.32);
+    const mode=rand()<counterStartProb?'counterflow':'impulse';
+    const direction=mode==='counterflow'?-q.primaryDir:q.primaryDir;
+    return {
+      mode,
+      direction,
+      previousImpulseDir:q.primaryDir,
+      age:0,
+      targetDuration:swingDuration(m,mode),
+      strength:clamp(q.baseStrength*(mode==='counterflow'?(.72+hs.roughness*.28):1),.24,.88),
+      accumulatedMove:0,
+      referenceMove:Math.max(.003,(m.volatilityState?.baseSigma||.002)*3.2),
+      counterTarget:clamp((hs.targetRetracement||.30)*(.78+rand()*.48),.14,.90),
+      localBias:(rand()-.5)*.16,
+      transitions:0,
+      lastTransitionStep:-1,
+      currentEfficiency:1
+    };
+  }
+
+  function transitionSwing(m, mode, direction, step, referenceMove=null){
+    const s=m.swingState || (m.swingState=createSwingState(m,48));
+    const q=m.intradaySequence || createIntradaySequence(m,48);
+    const hs=m.visual?.historyStructure || deriveHistoryPathStructure([]);
+    const oldMove=Math.abs(s.accumulatedMove||0);
+    s.mode=mode;
+    s.direction=direction||q.primaryDir;
+    s.age=0;
+    s.targetDuration=swingDuration(m,mode);
+    s.accumulatedMove=0;
+    s.referenceMove=Math.max(referenceMove||oldMove||s.referenceMove||.003,(m.volatilityState?.baseSigma||.002)*2.4);
+    s.counterTarget=clamp((hs.targetRetracement||.30)*(.76+rand()*.52),.12,.92);
+    s.localBias=clamp((rand()-.5)*(.18+hs.roughness*.18),-.24,.24);
+    s.strength=clamp(q.baseStrength*(mode==='counterflow'?(.68+hs.roughness*.42):mode==='absorption'?.34:mode==='balance'?.30:mode==='release'?.88:1),.18,.90);
+    if(mode==='impulse'||mode==='release') s.previousImpulseDir=s.direction;
+    s.transitions=(s.transitions||0)+1;
+    s.lastTransitionStep=step;
+    return s;
+  }
+
+  function livePrimaryBias(m){
+    const q=m.intradaySequence || createIntradaySequence(m,48);
+    const reserves=pressureReserveSnapshot(m);
+    const memory=m.memory||{};
+    return clamp(
+      q.primaryBias*.60 +
+      reserves.balance*.27 +
+      ((memory.buyPersistence||0)-(memory.sellPersistence||0))*.10 -
+      (memory.failedDemand||0)*.05,
+      -1,1
+    );
+  }
+
+  function intradayPhaseState(m, step, horizon){
+    const s=m.swingState || (m.swingState=createSwingState(m,horizon));
+    const liveBias=livePrimaryBias(m);
+    const liveDir=Math.abs(liveBias)>.055?Math.sign(liveBias):(m.intradaySequence?.primaryDir||1);
+    let phase='реализация основного дисбаланса',pulse=0,holdBoost=.08,returnScale=.84;
+    if(s.mode==='impulse'){
+      phase='реализация основного дисбаланса';
+      pulse=s.direction*s.strength;
+      holdBoost=.06; returnScale=.88;
+    } else if(s.mode==='release'){
+      phase='реализация основного дисбаланса';
+      pulse=s.direction*s.strength*.92;
+      holdBoost=.08; returnScale=.84;
+    } else if(s.mode==='absorption'){
+      phase='локальное удержание';
+      pulse=-s.direction*(.10+s.strength*.24)+s.localBias*.35;
+      holdBoost=.40; returnScale=.50;
+    } else if(s.mode==='counterflow'){
+      phase='встречная реакция';
+      pulse=s.direction*s.strength;
+      holdBoost=.08; returnScale=.82;
+    } else {
+      phase='временный баланс';
+      pulse=s.localBias;
+      holdBoost=.48; returnScale=.46;
     }
-    if(step<balanceEnd){
-      const oscillation=Math.sin((step-counterEnd+1)*1.72+q.phaseOffset)*.18 + Math.sin((step+1)*2.63+q.microOffset)*.08;
-      return {phase:'временный баланс',pulse:oscillation,holdBoost:.42,returnScale:q.balanceDamping};
+    return {phase,pulse,holdBoost,returnScale,swingMode:s.mode,swingDirection:s.direction,liveBias,liveDir};
+  }
+
+  function updateSwingState(m, step, ctx){
+    const s=m.swingState || (m.swingState=createSwingState(m,ctx.horizon||48));
+    const hs=m.visual?.historyStructure || deriveHistoryPathStructure([]);
+    const q=m.intradaySequence || createIntradaySequence(m,ctx.horizon||48);
+    const memory=m.memory||{};
+    s.age+=1;
+    s.accumulatedMove+=finite(ctx.ret,0);
+    m.pathTravel=(m.pathTravel||0)+Math.abs(finite(ctx.ret,0));
+    const logNet=Math.abs(Math.log(finitePositive(m.price,1)/finitePositive(m.startPrice,1)));
+    s.currentEfficiency=clamp(logNet/Math.max(1e-8,m.pathTravel||0),0,1);
+
+    const dir=s.direction||q.primaryDir;
+    const reserveAfter=ctx.reserveAfter||pressureReserveSnapshot(m);
+    const driverExhaustion=dir<0?reserveAfter.supplyExhaustion:reserveAfter.demandExhaustion;
+    const receiverResource=dir<0?reserveAfter.demandShare:reserveAfter.supplyShare;
+    const sameFlow=Math.sign(ctx.net||0)===dir;
+    const expected=Math.max((ctx.sigma||.001)*.72,(ctx.impactMagnitude||0)*.46,.00055);
+    const weakResponse=sameFlow && (ctx.imbalance||0)>.14 && Math.abs(ctx.ret||0)<expected;
+    const absorptionScore=clamp(
+      (m.visual?.absorption||0)*.22 +
+      (memory.absorptionConfidence||0)*.30 +
+      driverExhaustion*.25 +
+      receiverResource*.13 +
+      (weakResponse?.22:0) +
+      Math.max(0,s.currentEfficiency-(hs.targetEfficiency||.58))*.48,
+      0,1.4
+    );
+    const roughnessPressure=clamp((s.currentEfficiency-(hs.targetEfficiency||.58))*1.35,0,.72);
+    const ageReady=s.age>=2;
+    const maxed=s.age>=s.targetDuration;
+
+    if(s.mode==='impulse' || s.mode==='release'){
+      const move=Math.abs(s.accumulatedMove);
+      const moveUnits=move/Math.max(ctx.sigma||.001,.0007);
+      const shouldAbsorb=ageReady && (
+        absorptionScore>.56 ||
+        driverExhaustion>.44 ||
+        moveUnits>Math.max(2.2,(hs.targetSwingLength||3)*.86) ||
+        (roughnessPressure>.12 && rand()<roughnessPressure) ||
+        maxed
+      );
+      if(shouldAbsorb){
+        transitionSwing(m,'absorption',dir,step,move);
+      }
+      return;
     }
-    if(q.pauseDuration && step>=q.pauseStart && step<pauseEnd){
-      const local=(step-q.pauseStart+1)/Math.max(1,q.pauseDuration);
-      const oscillation=Math.sin(local*Math.PI*2.25+q.phaseOffset)*q.pauseStrength;
-      const mildCounter=-q.primaryDir*q.pauseStrength*.30*Math.sin(Math.PI*local);
-      return {phase:'локальное удержание',pulse:oscillation+mildCounter,holdBoost:.32,returnScale:.52};
+
+    if(s.mode==='absorption'){
+      const counterCapacity=clamp(receiverResource*(1-(dir<0?reserveAfter.demandExhaustion:reserveAfter.supplyExhaustion)),0,1);
+      const counterProb=clamp(.18 + absorptionScore*.34 + hs.roughness*.28 + counterCapacity*.22 + roughnessPressure*.28,.12,.84);
+      if(ageReady && (absorptionScore>.43 || s.age>=s.targetDuration)){
+        if(counterCapacity>.12 && rand()<counterProb){
+          transitionSwing(m,'counterflow',-dir,step,s.referenceMove);
+        } else {
+          const liveDir=Math.abs(livePrimaryBias(m))>.05?Math.sign(livePrimaryBias(m)):q.primaryDir;
+          transitionSwing(m,'release',liveDir,step,s.referenceMove);
+        }
+      }
+      return;
     }
-    const progress=Math.max(0,step-balanceEnd+1)/Math.max(1,horizon-balanceEnd);
-    const ramp=.28+.72*(1-Math.exp(-progress*2.25));
-    const modulation=.70 + .30*Math.sin((step-balanceEnd)*.61+q.phaseOffset*.35);
-    // Высокочастотная встречная компонента создаёт нормальные локальные откаты внутри общего bias.
-    const pullback=Math.sin((step-balanceEnd)*1.19+q.phaseOffset)*.30*(1-progress*.28);
-    const microWave=Math.sin((step-balanceEnd)*2.47+q.microOffset)*(.16+.08*(1-progress));
-    const pulse=q.primaryDir*q.releaseStrength*ramp*modulation + pullback + microWave;
-    return {phase:'реализация основного дисбаланса',pulse,holdBoost:.10,returnScale:.72+.18*progress};
+
+    if(s.mode==='counterflow'){
+      const move=Math.abs(s.accumulatedMove);
+      const retraceProgress=move/Math.max(.001,s.referenceMove||.003);
+      const counterExhaustion=s.direction>0?reserveAfter.demandExhaustion:reserveAfter.supplyExhaustion;
+      const flowFailure=Math.sign(ctx.net||0)!==s.direction && (ctx.imbalance||0)>.17;
+      const globalAgainst=Math.sign(livePrimaryBias(m))===-s.direction && Math.abs(livePrimaryBias(m))>.18;
+      const targetReached=retraceProgress>=s.counterTarget;
+      if(ageReady && (targetReached || counterExhaustion>.46 || flowFailure || globalAgainst && s.age>=3 || maxed)){
+        const goBalance=hs.roughness>.34 && rand()<clamp(.24+hs.turnRate*.70,.18,.62);
+        if(goBalance) transitionSwing(m,'balance',s.direction,step,s.referenceMove);
+        else {
+          const nextDir=Math.abs(livePrimaryBias(m))>.05?Math.sign(livePrimaryBias(m)):q.primaryDir;
+          transitionSwing(m,'release',nextDir,step,s.referenceMove);
+        }
+      }
+      return;
+    }
+
+    if(s.mode==='balance'){
+      const live=livePrimaryBias(m);
+      const decisive=Math.abs(live)>.14 || (ctx.imbalance||0)>.26;
+      if((s.age>=2 && decisive) || maxed){
+        let nextDir=Math.abs(live)>.05?Math.sign(live):q.primaryDir;
+        if((ctx.imbalance||0)>.30 && Math.sign(ctx.net||0)) nextDir=Math.sign(ctx.net);
+        transitionSwing(m,'release',nextDir,step,s.referenceMove);
+      }
+    }
   }
 
   function createVolatilityState(profileName, visual, horizon){
@@ -1623,7 +1831,7 @@
       shockScale,
       meanReversion:clamp(.09 + hv.reversionScale*.055 + hv.reversalRate*.11 + clamp(visual?.absorption||0,0,1)*.06,.08,.29),
       bodyMultiplier:clamp(.96 + hv.medianBody*.42 + hv.medianRange*.16 + hv.jumpSigma*.24,.92,1.55),
-      wickMultiplier:clamp(1.02 + hv.p75Range*.34 + hv.burstRate*.38 + hv.jumpSigma*.28,1.0,2.0),
+      wickMultiplier:clamp(1.00 + hv.p75Range*.22 + hv.burstRate*.24 + hv.jumpSigma*.18,.96,1.55),
       recentShock:0,
       eventCooldown:0
     };
@@ -1657,6 +1865,7 @@
       profileName,
       startPrice:1,
       directionStreak:0,
+      pathTravel:0,
       volatilityState:createVolatilityState(profileName, visual, horizon),
       rangeBudget:clamp(
         (profileName==="microcap" ? .30 : profileName==="midcap" ? .14 : .22) *
@@ -1712,6 +1921,7 @@
     // Базовый запас нужен только как точка отсчёта для истощения в этой симуляции.
     market.initialReserves=pressureReserveSnapshot(market);
     market.intradaySequence=createIntradaySequence(market,horizon||48);
+    market.swingState=createSwingState(market,horizon||48);
     return market;
   }
 
@@ -2052,16 +2262,16 @@
     const absRet=Math.abs(ret);
     const sigma=Math.max(.0007,context.sigma||0);
     const eventAbs=Math.abs(context.eventShock||0);
-    const balanceBoost=phase==='временный баланс' ? 1.18 : phase==='встречная реакция' ? 1.08 : phase==='локальное удержание' ? 1.05 : 1.0;
+    const balanceBoost=phase==='временный баланс' ? 1.10 : phase==='встречная реакция' ? 1.04 : phase==='локальное удержание' ? 1.02 : 1.0;
     const bodyMultiplier=clamp(context.bodyMultiplier||1, .85, 2.0);
     const wickMultiplier=clamp(context.wickMultiplier||1, .90, 3.0);
-    const baseExcursion=clamp((.00065 + absRet*.20 + sigma*.95 + imbalance*.0015 + stress*.0013 + flowIntensity*.0012 + eventAbs*.40)*balanceBoost*bodyMultiplier,.00065,.022);
+    const baseExcursion=clamp((.00048 + absRet*.17 + sigma*.58 + imbalance*.00115 + stress*.00095 + flowIntensity*.00095 + eventAbs*.24)*balanceBoost*bodyMultiplier,.00045,.014);
     const seed=Math.abs((o*100003+c*37013+(context.net||0)*911));
     const n1=.56+seededNoise(seed+1.7)*.84;
     const n2=.56+seededNoise(seed+3.9)*.84;
     const asymmetry=eventAbs>.003 ? (1 + eventAbs*12) : 1;
-    const counterSide=baseExcursion*(.70 + (1-imbalance)*.34 + sigma*16*.08)*n1*wickMultiplier;
-    const continuationSide=baseExcursion*(.56 + imbalance*.42 + eventAbs*22*.10)*n2*asymmetry*wickMultiplier;
+    const counterSide=baseExcursion*(.66 + (1-imbalance)*.28 + sigma*14*.06)*n1*wickMultiplier;
+    const continuationSide=baseExcursion*(.54 + imbalance*.34 + eventAbs*18*.08)*n2*asymmetry*wickMultiplier;
     let high=Math.max(o,c), low=Math.min(o,c);
     if(dir>0){
       high=Math.max(high,Math.max(o,c)*Math.exp(continuationSide));
@@ -2139,7 +2349,7 @@
           .14*memory.capitalDepletion -
           .16*memory.failedDemand +
           .20*reserveDemandSupport +
-          .34*Math.max(0,phase.pulse) -
+          .48*Math.max(0,phase.pulse) -
           .12*reserveSupplyPressure -
           .30*reserveBefore.demandExhaustion +
           .10*reserveBefore.supplyExhaustion +
@@ -2164,7 +2374,7 @@
           .22*memorySellPressure +
           .12*memory.failedDemand +
           .20*reserveSupplyPressure +
-          .34*Math.max(0,-phase.pulse) -
+          .48*Math.max(0,-phase.pulse) -
           .10*reserveDemandSupport -
           .28*reserveBefore.supplyExhaustion +
           .12*reserveBefore.demandExhaustion +
@@ -2290,7 +2500,7 @@
     const streak=Math.max(0,m.directionStreak||0);
     const recentSign=Math.sign(recentRet);
     const volState=m.volatilityState || (m.volatilityState=createVolatilityState(m.profileName||'default', v, horizon));
-    const phaseVolMultiplier=phase.phase==='временный баланс' ? .86 : phase.phase==='встречная реакция' ? 1.05 : phase.phase==='локальное удержание' ? .94 : 1.12;
+    const phaseVolMultiplier=phase.swingMode==='balance' ? .82 : phase.swingMode==='counterflow' ? 1.08 : phase.swingMode==='absorption' ? .88 : 1.12;
     const recentCarry=clamp(Math.abs(recentRet)/Math.max(.001,m.stepReturnCap||.030),0,1)*volState.baseSigma*.72;
     const sigmaTarget=clamp(
       volState.baseSigma*(1 + stress*.68 + imbalance*.34 + m.cascadeIntensity*.28 + m.liquidityRetreat*.20 + volState.recentShock*.24)*phaseVolMultiplier + recentCarry,
@@ -2316,10 +2526,11 @@
       .0008*(memory.buyPersistence-memory.sellPersistence) -
       .0006*memory.failedDemand;
 
-    const drift=baseBehaviorRet*phase.returnScale + .00055*phase.pulse;
+    const swingDrift=phase.pulse*sigma*(.58 + (m.visual?.historyStructure?.waveStrength||1)*.18);
+    const drift=baseBehaviorRet*phase.returnScale + swingDrift;
     const localShock=gauss()*sigma;
-    const meanRevert=-recentRet*volState.meanReversion*(phase.phase==='временный баланс'?1.42:phase.phase==='локальное удержание'?1.16:1.0)*clamp(1+streak*.06,1,1.55);
-    const counterChance=clamp(.12 + Math.max(0,streak-2)*.05 + (phase.phase==='временный баланс'?.18:0) + (phase.phase==='локальное удержание'?.10:0) + stress*.08 + (volState.meanReversion-.08)*1.2,.10,.56);
+    const meanRevert=-recentRet*volState.meanReversion*(phase.swingMode==='balance'?1.34:phase.swingMode==='absorption'?1.18:.82)*clamp(1+streak*.045,1,1.42);
+    const counterChance=clamp(.08 + Math.max(0,streak-3)*.035 + (phase.swingMode==='balance'?.10:0) + (phase.swingMode==='absorption'?.08:0) + stress*.05 + (volState.meanReversion-.08)*.75,.06,.38);
     const counterKick=(recentSign && rand()<counterChance)
       ? -recentSign*clamp((.34 + Math.abs(gauss())*.72)*sigma*(1+streak*.08), sigma*.22, sigma*1.55)
       : 0;
@@ -2340,7 +2551,7 @@
       const directionalBias=Math.sign(net)||Math.sign(drift)||Math.sign(phase.pulse)||1;
       let shockSign=directionalBias;
       const budgetUsage=clamp(Math.abs(logFromStart)/Math.max(.0001,budget),0,1.4);
-      const counterEventProb=clamp(.12 + Math.max(0,streak-3)*.04 + Math.max(0,budgetUsage-.58)*.28 + (phase.phase==='временный баланс'?.08:0),.08,.46);
+      const counterEventProb=clamp(.10 + Math.max(0,streak-4)*.03 + Math.max(0,budgetUsage-.58)*.22 + (phase.swingMode==='balance'?.06:0),.07,.38);
       if(recentSign && rand()<counterEventProb) shockSign=-recentSign;
       const eventScale=1 + stress*.44 + imbalance*.38 + m.cascadeIntensity*.30 + volState.recentShock*.16;
       const shockAbs=clamp((.62 + Math.abs(gauss())*.72)*volState.shockScale*eventScale,sigma*.92,(m.stepReturnCap||.030)*.82);
@@ -2391,6 +2602,7 @@
       wickMultiplier:(m.volatilityState?.wickMultiplier||1)
     });
     m.lastReturn=finite(ret,0);
+    updateSwingState(m,step,{ret,net,total,imbalance,stress,sigma,impactMagnitude,reserveBefore,reserveAfter,horizon});
     m.attention=clamp(
       m.attention + .15*Math.abs(ret) + .035*v.reflexivity + regimeDef.attention*.08 - .014*(m.attention-.45) + gauss()*.006,
       .05,.99
@@ -2415,6 +2627,9 @@
       sellFlow,
       intradayPhase:phase.phase,
       intradayPulse:phase.pulse,
+      swingMode:phase.swingMode,
+      swingDirection:phase.swingDirection,
+      pathEfficiency:m.swingState?.currentEfficiency ?? null,
       volatilitySigma:m.volatilityState?.currentSigma || 0,
       eventShock,
       reserves:{
@@ -2603,19 +2818,24 @@
     if(currentStreak) streaks.push(currentStreak);
     const burstRate=absRets.length ? absRets.filter(v=>v>=Math.max(quantile(absRets,.84),mean(absRets)+std(absRets)*.45)).length/absRets.length : 0;
     const avgStreak=mean(streaks)||1;
+    const structure=structureStatsFromSeries(clean.map(v=>Math.log(v/start)));
     return [
-      Math.log(end/start)*1.18,
+      Math.log(end/start)*1.12,
       Math.log(max/start),
       Math.log(min/start),
-      std(rets)*4.6,
-      quantile(absRets,.90)*4.0,
-      (Math.max(...absRets,0))*3.4,
-      clamp(burstRate,0,1)*.42,
-      maxIndex*.24,
-      minIndex*.24,
-      clamp(turns/Math.max(1,rets.length-1),0,1)*.30,
-      clamp(avgStreak/Math.max(1,clean.length*.16),0,1)*.24,
-      ...signature.map(v=>v*.70)
+      std(rets)*4.4,
+      quantile(absRets,.90)*3.8,
+      (Math.max(...absRets,0))*3.1,
+      clamp(burstRate,0,1)*.38,
+      structure.directionalEfficiency*.46,
+      clamp(structure.swingCount/Math.max(3,clean.length*.24),0,1)*.34,
+      structure.medianSwingAmplitude*.34,
+      clamp(structure.medianRetracement,0,1.2)*.30,
+      maxIndex*.22,
+      minIndex*.22,
+      clamp(turns/Math.max(1,rets.length-1),0,1)*.26,
+      clamp(avgStreak/Math.max(1,clean.length*.16),0,1)*.20,
+      ...signature.map(v=>v*.66)
     ].map(v=>finite(v,0));
   }
   function distance(a,b){ let s=0; for(let i=0;i<a.length;i++){ const d=a[i]-b[i]; s+=d*d; } return Math.sqrt(s); }
@@ -2627,16 +2847,24 @@
     const targetBurst=quantile(stats.map(s=>s.burstRate),.50);
     const targetFlip=quantile(stats.map(s=>s.signFlipRate),.50);
     const targetStreak=quantile(stats.map(s=>s.avgStreak),.50);
+    const targetEfficiency=quantile(stats.map(s=>s.directionalEfficiency),.50);
+    const targetSwingCount=quantile(stats.map(s=>s.swingCount),.50);
+    const targetSwingAmp=quantile(stats.map(s=>s.medianSwingAmplitude),.50);
+    const targetRetrace=quantile(stats.map(s=>s.medianRetracement),.50);
     let best=indices[0], bestScore=Infinity;
     for(const s of stats){
       const dFeat=distance(feats[s.i],centroid);
       const volPenalty=
         Math.abs(s.realizedVol-targetVol)/Math.max(.0006,targetVol||.0006) +
         Math.abs(s.p90Abs-targetP90)/Math.max(.0008,targetP90||.0008) +
-        Math.abs(s.burstRate-targetBurst)*1.8 +
-        Math.abs(s.signFlipRate-targetFlip)*1.1 +
-        Math.abs(s.avgStreak-targetStreak)/Math.max(1,targetStreak||1);
-      const score=dFeat + volPenalty*.22;
+        Math.abs(s.burstRate-targetBurst)*1.55 +
+        Math.abs(s.signFlipRate-targetFlip)*.90 +
+        Math.abs(s.avgStreak-targetStreak)/Math.max(1,targetStreak||1) +
+        Math.abs(s.directionalEfficiency-targetEfficiency)*1.45 +
+        Math.abs(s.swingCount-targetSwingCount)/Math.max(2,targetSwingCount||2)*.85 +
+        Math.abs(s.medianSwingAmplitude-targetSwingAmp)/Math.max(.04,targetSwingAmp||.04)*.65 +
+        Math.abs(s.medianRetracement-targetRetrace)/Math.max(.12,targetRetrace||.12)*.70;
+      const score=dFeat + volPenalty*.24;
       if(score<bestScore){ bestScore=score; best=s.i; }
     }
     return best;
