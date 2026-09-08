@@ -359,7 +359,8 @@
     c.width=w; c.height=h;
     const cctx=c.getContext('2d',{willReadFrequently:true});
     cctx.drawImage(img,0,0,w,h);
-    return { w,h,data:cctx.getImageData(0,0,w,h).data, canvas:c };
+    // Временный canvas существует только для распознавания пикселей и никогда не попадает в renderer.
+    return { w,h,data:cctx.getImageData(0,0,w,h).data };
   }
 
   function estimateBounds(dataObj){
@@ -621,15 +622,6 @@
     const historyCandles = cand.candles.length ? normalizeCandles(cand.candles) : [];
     const path = historyCandles.length ? normalizePath(historyCandles.map(c=>c.c)) : line.path;
     const confidence = Math.max(line.confidence*0.66, cand.confidence*0.98);
-    const rawLast=cand.candles?.[cand.candles.length-1];
-    const rawLastPixelY=rawLast ? bounds.y0 - rawLast.c*(bounds.y1-bounds.y0) : dataObj.h*.52;
-    const previewCrop={
-      x0:Math.round(dataObj.w*.015),
-      x1:Math.round(dataObj.w*.905),
-      y0:Math.round(dataObj.h*.075),
-      y1:Math.round(dataObj.h*.955)
-    };
-    const lastCloseFraction=clamp((rawLastPixelY-previewCrop.y0)/Math.max(1,previewCrop.y1-previewCrop.y0),0.05,0.95);
     return {
       name:item.file.name,
       tf,
@@ -640,11 +632,7 @@
       confidence,
       candles:historyCandles,
       sourceWidth:dataObj.w,
-      sourceHeight:dataObj.h,
-      previewCanvas:dataObj.canvas,
-      previewCrop,
-      lastClosePixelY:rawLastPixelY,
-      lastCloseFraction
+      sourceHeight:dataObj.h
     };
   }
 
@@ -1106,7 +1094,7 @@
     const visual=mergeStates(shortState, midState, longState) || deriveVisualState((m15Best || bestOf([...extracted])).path);
 
     const displayBase = m15Best || shortBest || midBest || longBest || extracted[0];
-    let displayCandles = (displayBase.candles || []).slice(-36);
+    let displayCandles = (displayBase.candles || []).slice(-40);
     if(!displayCandles.length){
       const displayPath = resample(displayBase.path, 48);
       displayCandles = pathToCandles(displayPath.map(v=>1+v*0.3), 44, 0.72).map(c=>( { o:c.o-1, h:c.h-1, l:c.l-1, c:c.c-1 }));
@@ -1278,27 +1266,26 @@
   function createIntradaySequence(m, horizon){
     const reserves=m.initialReserves || pressureReserveSnapshot(m);
     const v=m.visual || {};
-    // Sign is not a technical signal: it is the current balance of available demand/supply
-    // combined with the multi-timeframe market-state context.
-    let primaryBias=clamp(reserves.balance*.54 + (v.pressureBias||0)*.30 + ((v.globalContext?.pressureBias)||0)*.16,-1,1);
+    // Основное направление — только медленный поведенческий bias. Оно не должно красить каждую свечу в один цвет.
+    let primaryBias=clamp(reserves.balance*.52 + (v.pressureBias||0)*.30 + ((v.globalContext?.pressureBias)||0)*.18,-1,1);
     if(Math.abs(primaryBias)<.06){
       const regimeDir={accumulation:.25,fomo_chase:.55,distribution:-.48,panic_exit:-.62,absorption:.10,liquidity_vacuum:0,balance:0}[m.regime]||0;
-      primaryBias=clamp(primaryBias+regimeDir*.45+gauss()*.05,-1,1);
+      primaryBias=clamp(primaryBias+regimeDir*.38+gauss()*.05,-1,1);
     }
     const primaryDir=primaryBias>=0 ? 1 : -1;
     const stress=clamp((v.crowdStress||0)*.36 + (v.reflexivity||0)*.28 + (v.liquidityBufferFragility||0)*.22 + Math.abs(primaryBias)*.14,0,1);
     const receivingResource=primaryDir<0 ? reserves.demandShare : reserves.supplyShare;
-    const counterProbability=clamp(.20 + stress*.30 + receivingResource*.24 + (v.absorption||0)*.16, .12, .82);
+    const counterProbability=clamp(.24 + stress*.28 + receivingResource*.22 + (v.absorption||0)*.16, .16, .82);
     const hasCounter=Math.random()<counterProbability;
     const counterDuration=hasCounter ? clamp(Math.round(2 + Math.random()*5),2,7) : 0;
-    const balanceDuration=clamp(Math.round(2 + (v.compression||0)*4 + Math.random()*4),2,8);
-    const counterStrength=clamp(.34 + stress*.30 + receivingResource*.22 + Math.random()*.18,.28,.92);
-    const releaseStrength=clamp(.38 + Math.abs(primaryBias)*.38 + stress*.18 + Math.random()*.12,.34,.96);
-    const balanceDamping=clamp(.34 + (v.absorption||0)*.22 + Math.random()*.14,.30,.66);
+    const balanceDuration=clamp(Math.round(3 + (v.compression||0)*4 + Math.random()*4),3,9);
+    const counterStrength=clamp(.26 + stress*.25 + receivingResource*.18 + Math.random()*.16,.22,.74);
+    const releaseStrength=clamp(.26 + Math.abs(primaryBias)*.30 + stress*.15 + Math.random()*.10,.24,.68);
+    const balanceDamping=clamp(.40 + (v.absorption||0)*.20 + Math.random()*.14,.36,.68);
     const minimumAfterBalance=counterDuration+balanceDuration+5;
-    const pauseStart=clamp(Math.round(horizon*(.52 + Math.random()*.16)), minimumAfterBalance, Math.max(minimumAfterBalance,horizon-6));
+    const pauseStart=clamp(Math.round(horizon*(.48 + Math.random()*.22)), minimumAfterBalance, Math.max(minimumAfterBalance,horizon-6));
     const pauseDuration=horizon>=28 ? clamp(Math.round(2 + Math.random()*5),2,6) : 0;
-    const pauseStrength=clamp(.10 + (v.absorption||0)*.18 + Math.random()*.12,.08,.34);
+    const pauseStrength=clamp(.10 + (v.absorption||0)*.16 + Math.random()*.10,.08,.30);
     return {
       primaryDir,
       primaryBias,
@@ -1312,6 +1299,7 @@
       pauseDuration,
       pauseStrength,
       phaseOffset:Math.random()*Math.PI*2,
+      microOffset:Math.random()*Math.PI*2,
       horizon
     };
   }
@@ -1324,24 +1312,27 @@
     if(q.hasCounter && step<counterEnd){
       const t=(step+1)/Math.max(1,counterEnd);
       const wave=Math.sin(Math.PI*t);
-      return {phase:'встречная реакция',pulse:-q.primaryDir*q.counterStrength*wave,holdBoost:.02,returnScale:.88};
+      const micro=Math.sin((step+1)*2.15+q.microOffset)*.13;
+      return {phase:'встречная реакция',pulse:-q.primaryDir*q.counterStrength*wave+micro,holdBoost:.05,returnScale:.80};
     }
     if(step<balanceEnd){
-      const oscillation=Math.sin((step-counterEnd+1)*1.55+q.phaseOffset)*.16;
-      return {phase:'временный баланс',pulse:oscillation,holdBoost:.38,returnScale:q.balanceDamping};
+      const oscillation=Math.sin((step-counterEnd+1)*1.72+q.phaseOffset)*.18 + Math.sin((step+1)*2.63+q.microOffset)*.08;
+      return {phase:'временный баланс',pulse:oscillation,holdBoost:.42,returnScale:q.balanceDamping};
     }
     if(q.pauseDuration && step>=q.pauseStart && step<pauseEnd){
       const local=(step-q.pauseStart+1)/Math.max(1,q.pauseDuration);
       const oscillation=Math.sin(local*Math.PI*2.25+q.phaseOffset)*q.pauseStrength;
-      const mildCounter=-q.primaryDir*q.pauseStrength*.24*Math.sin(Math.PI*local);
-      return {phase:'локальное удержание',pulse:oscillation+mildCounter,holdBoost:.28,returnScale:.48};
+      const mildCounter=-q.primaryDir*q.pauseStrength*.30*Math.sin(Math.PI*local);
+      return {phase:'локальное удержание',pulse:oscillation+mildCounter,holdBoost:.32,returnScale:.52};
     }
     const progress=Math.max(0,step-balanceEnd+1)/Math.max(1,horizon-balanceEnd);
-    const ramp=.34+.66*(1-Math.exp(-progress*2.55));
-    const modulation=.72 + .28*Math.sin((step-balanceEnd)*.58+q.phaseOffset*.35);
-    const pullback=Math.sin((step-balanceEnd)*1.13+q.phaseOffset)*.30*(1-progress*.32);
-    const pulse=q.primaryDir*q.releaseStrength*ramp*modulation + pullback;
-    return {phase:'реализация основного дисбаланса',pulse,holdBoost:.07,returnScale:.78+.18*progress};
+    const ramp=.28+.72*(1-Math.exp(-progress*2.25));
+    const modulation=.70 + .30*Math.sin((step-balanceEnd)*.61+q.phaseOffset*.35);
+    // Высокочастотная встречная компонента создаёт нормальные локальные откаты внутри общего bias.
+    const pullback=Math.sin((step-balanceEnd)*1.19+q.phaseOffset)*.30*(1-progress*.28);
+    const microWave=Math.sin((step-balanceEnd)*2.47+q.microOffset)*(.16+.08*(1-progress));
+    const pulse=q.primaryDir*q.releaseStrength*ramp*modulation + pullback + microWave;
+    return {phase:'реализация основного дисбаланса',pulse,holdBoost:.10,returnScale:.72+.18*progress};
   }
 
   function initMarket(profileName, visual, regimes, marketStateBuckets, horizon){
@@ -1756,28 +1747,28 @@
     const o=finitePositive(openPrice,1), c=finitePositive(closePrice,o);
     const ret=Math.log(c/o);
     const dir=Math.sign(ret) || Math.sign(context.net||0) || 1;
-    const flowDir=Math.sign(context.net||0) || dir;
     const imbalance=clamp(context.imbalance||0,0,1);
     const stress=clamp(context.stress||0,0,1);
     const liquidity=Math.max(.10,context.liquidity||1);
     const phase=context.phase || 'реакция';
-    const flowAmp=clamp((Math.abs(context.net||0)/liquidity)*.0048 + Math.abs(ret)*.28 + stress*.0028, .0009,.018);
-    const counterWeight=phase==='встречная реакция' ? 1.0 : phase==='временный баланс' ? .78 : .40;
-    const pushWeight=phase==='реализация основного дисбаланса' ? 1.0 : phase==='временный баланс' ? .58 : .72;
-    const n1=0.72+Math.random()*.46, n2=0.72+Math.random()*.46, n3=0.72+Math.random()*.46;
-    const p1=finitePositive(o*Math.exp(-flowDir*flowAmp*counterWeight*n1),o);
-    const baseMid=Math.sqrt(o*c);
-    const p2=finitePositive(baseMid*Math.exp(flowDir*flowAmp*pushWeight*n2 + dir*Math.abs(ret)*.18),baseMid);
-    const p3=finitePositive(c*Math.exp(-dir*flowAmp*(.22+.34*(1-imbalance))*n3),c);
-    const points=[o,p1,p2,p3,c];
-    const high=Math.max(...points), low=Math.min(...points);
-    const extra=flowAmp*(.14+.24*stress);
-    return {
-      o,
-      h:Math.max(high,Math.max(o,c)*Math.exp(extra*(.55+Math.random()*.45))),
-      l:Math.min(low,Math.min(o,c)*Math.exp(-extra*(.55+Math.random()*.45))),
-      c
-    };
+    const flowIntensity=clamp(Math.abs(context.net||0)/liquidity,0,2);
+    const absRet=Math.abs(ret);
+    const balanceBoost=phase==='временный баланс' ? 1.30 : phase==='встречная реакция' ? 1.12 : 1.0;
+    const baseExcursion=clamp((.00055 + absRet*.24 + imbalance*.0017 + stress*.0014 + flowIntensity*.0013)*balanceBoost,.00055,.014);
+    const seed=Math.abs((o*100003+c*37013+(context.net||0)*911));
+    const n1=.58+seededNoise(seed+1.7)*.78;
+    const n2=.58+seededNoise(seed+3.9)*.78;
+    const counterSide=baseExcursion*(.72 + (1-imbalance)*.34)*n1;
+    const continuationSide=baseExcursion*(.58 + imbalance*.42)*n2;
+    let high=Math.max(o,c), low=Math.min(o,c);
+    if(dir>0){
+      high=Math.max(high,Math.max(o,c)*Math.exp(continuationSide));
+      low=Math.min(low,Math.min(o,c)*Math.exp(-counterSide));
+    } else {
+      high=Math.max(high,Math.max(o,c)*Math.exp(counterSide));
+      low=Math.min(low,Math.min(o,c)*Math.exp(-continuationSide));
+    }
+    return {o,h:high,l:low,c};
   }
 
   function stepMarket(m, step, horizon){
@@ -1846,7 +1837,7 @@
           .14*memory.capitalDepletion -
           .16*memory.failedDemand +
           .20*reserveDemandSupport +
-          .72*Math.max(0,phase.pulse) -
+          .34*Math.max(0,phase.pulse) -
           .12*reserveSupplyPressure -
           .30*reserveBefore.demandExhaustion +
           .10*reserveBefore.supplyExhaustion +
@@ -1871,7 +1862,7 @@
           .22*memorySellPressure +
           .12*memory.failedDemand +
           .20*reserveSupplyPressure +
-          .72*Math.max(0,-phase.pulse) -
+          .34*Math.max(0,-phase.pulse) -
           .10*reserveDemandSupport -
           .28*reserveBefore.supplyExhaustion +
           .12*reserveBefore.demandExhaustion +
@@ -2001,7 +1992,17 @@
       .0011*cascadeDirection*m.cascadeIntensity +
       .0008*(memory.buyPersistence-memory.sellPersistence) -
       .0006*memory.failedDemand;
-    const behaviorRet=baseBehaviorRet*phase.returnScale + .0048*phase.pulse;
+    const streak=Math.max(0,m.directionStreak||0);
+    const recentSign=Math.sign(recentRet);
+    const localShockScale=.00065 + .00115*clamp(v.vol||0,0,1) + .00085*stress + .00055*clamp(v.reflexivity||0,0,1);
+    const phaseBias=.00215*phase.pulse;
+    const meanRevert=-recentRet*(phase.phase==='временный баланс'?.24:phase.phase==='локальное удержание'?.18:.09)*clamp(1+streak*.07,1,1.65);
+    const counterChance=clamp(.10 + Math.max(0,streak-2)*.055 + (phase.phase==='временный баланс'?.18:0) + (phase.phase==='локальное удержание'?.12:0) + stress*.06,.08,.46);
+    const counterKick=(recentSign && Math.random()<counterChance)
+      ? -recentSign*(.00035 + Math.abs(gauss())*localShockScale*.72)
+      : 0;
+    const localShock=gauss()*localShockScale;
+    const behaviorRet=baseBehaviorRet*phase.returnScale + phaseBias + meanRevert + counterKick + localShock;
 
 
     // 5% только для визуальной непрерывности последних свечей; не создаёт сценарий сама по себе.
@@ -2024,6 +2025,11 @@
     if(Math.abs(projected)>budget){
       ret=Math.sign(projected)*budget-logFromStart;
     }
+
+    const retSign=Math.sign(ret);
+    if(retSign && retSign===Math.sign(recentRet)) m.directionStreak=Math.min(12,(m.directionStreak||0)+1);
+    else if(retSign) m.directionStreak=1;
+    else m.directionStreak=Math.max(0,(m.directionStreak||0)-1);
 
     const nextPrice=previousPrice*Math.exp(ret);
     m.price=finitePositive(nextPrice,previousPrice);
@@ -2621,46 +2627,98 @@
     ctx.setTransform(dpr,0,0,dpr,0,0); return {w:cssW,h:cssH};
   }
 
-  function scaleHistoryCandles(candles, futureSpan){
+  function anchorHistoryCandles(candles){
     const clean=(candles||[]).filter(c=>c && [c.o,c.h,c.l,c.c].every(Number.isFinite));
     if(!clean.length) return [];
-    const tail=clean.slice(-36);
-    const all=[...tail.map(c=>c.h), ...tail.map(c=>c.l)], histRange=Math.max(1e-6, finite(Math.max(...all)-Math.min(...all),1));
-    const amp=clamp(finite(futureSpan,.20)*1.04, 0.24, 0.74);
-    return tail.map(c=>({o:1+c.o/histRange*amp, h:1+c.h/histRange*amp, l:1+c.l/histRange*amp, c:1+c.c/histRange*amp})).filter(c=>[c.o,c.h,c.l,c.c].every(Number.isFinite));
+    const tail=clean.slice(-40);
+    const lastClose=tail[tail.length-1].c;
+    const hi=Math.max(...tail.map(c=>c.h));
+    const lo=Math.min(...tail.map(c=>c.l));
+    const sourceRange=Math.max(1e-6,hi-lo);
+    // История имеет собственный стабильный масштаб и никогда не подгоняется под будущий сценарий.
+    const historySpan=clamp(.22 + clamp(lastResult?.visual?.vol||0,0,1)*.055,.22,.285);
+    return tail.map(c=>({
+      o:1+((c.o-lastClose)/sourceRange)*historySpan,
+      h:1+((c.h-lastClose)/sourceRange)*historySpan,
+      l:1+((c.l-lastClose)/sourceRange)*historySpan,
+      c:1+((c.c-lastClose)/sourceRange)*historySpan
+    })).map(c=>({
+      o:finitePositive(c.o,1),
+      h:Math.max(finitePositive(c.h,1),finitePositive(c.o,1),finitePositive(c.c,1)),
+      l:Math.min(finitePositive(c.l,1),finitePositive(c.o,1),finitePositive(c.c,1)),
+      c:finitePositive(c.c,1)
+    }));
   }
 
-  function drawCandles(candles,x0,x1,palette,yMap){
-    if(!candles.length) return;
-    const step=(x1-x0)/candles.length, bodyW=clamp(step*0.66,4,13);
+  function stitchForecastCandles(candles, anchor=1){
+    const out=[];
+    let prev=finitePositive(anchor,1);
+    for(const raw of candles||[]){
+      if(!raw || ![raw.o,raw.h,raw.l,raw.c].every(Number.isFinite)) continue;
+      const ro=finitePositive(raw.o,prev), rc=finitePositive(raw.c,ro);
+      const bodyRatio=clamp(rc/ro,.86,1.16);
+      const upperRatio=Math.max(1, finitePositive(raw.h,Math.max(ro,rc))/Math.max(ro,rc));
+      const lowerRatio=Math.min(1, finitePositive(raw.l,Math.min(ro,rc))/Math.min(ro,rc));
+      const o=prev;
+      const c=finitePositive(o*bodyRatio,o);
+      const h=Math.max(o,c)*upperRatio;
+      const l=Math.min(o,c)*lowerRatio;
+      out.push({o,h:Math.max(h,o,c),l:Math.min(l,o,c),c});
+      prev=c;
+    }
+    return out;
+  }
+
+  function validateCandleSeries(candles,label){
+    let ok=Array.isArray(candles) && candles.length>0;
+    for(let i=0;i<(candles||[]).length;i++){
+      const c=candles[i];
+      const valid=!!c && [c.o,c.h,c.l,c.c].every(Number.isFinite) && c.h>=Math.max(c.o,c.c) && c.l<=Math.min(c.o,c.c);
+      if(!valid){ ok=false; console.warn(`[chart] invalid ${label} candle`,i,c); break; }
+      if(i>0 && Math.abs(c.o-candles[i-1].c)>1e-8){ ok=false; console.warn(`[chart] broken ${label} continuity`,i,c.o,candles[i-1].c); break; }
+    }
+    return ok;
+  }
+
+  function drawCandles(candles,startIndex,totalCount,x0,x1,palette,yMap){
+    if(!candles.length || totalCount<=0) return;
+    const step=(x1-x0)/totalCount;
+    const gap=clamp(step*.28,.55,2.2);
+    const bodyW=Math.max(.85,Math.min(step-gap,step*.70));
+    const wickW=clamp(step*.18,.75,1.25);
     for(let i=0;i<candles.length;i++){
       const c=candles[i];
       if(!c || ![c.o,c.h,c.l,c.c].every(Number.isFinite)) continue;
-      const cx=x0+step*i+step*.5, up=c.c>=c.o;
+      const cx=x0+step*(startIndex+i+.5), up=c.c>=c.o;
       const color=up?palette.up:palette.down, wickColor=up?(palette.wickUp||palette.up):(palette.wickDown||palette.down);
       const yo=yMap(c.o), yc=yMap(c.c), yh=yMap(c.h), yl=yMap(c.l);
-      const top=Math.min(yo,yc), bottom=Math.max(yo,yc), bodyH=Math.max(2,bottom-top);
-      ctx.strokeStyle=wickColor; ctx.lineWidth=1.15; ctx.beginPath(); ctx.moveTo(cx,yh); ctx.lineTo(cx,yl); ctx.stroke();
+      const top=Math.min(yo,yc), bottom=Math.max(yo,yc), bodyH=Math.max(1,bottom-top);
+      ctx.strokeStyle=wickColor; ctx.lineWidth=wickW; ctx.beginPath(); ctx.moveTo(cx,yh); ctx.lineTo(cx,yl); ctx.stroke();
       ctx.fillStyle=color; ctx.fillRect(cx-bodyW/2, top, bodyW, bodyH);
     }
   }
 
   function getScenarioVisuals(){
-    const clusterA=lastResult.clusters[0], clusterB=lastResult.clusters[1], active=lastResult.clusters[selectedModel], ghost=lastResult.clusters[selectedModel===0?1:0];
-    const spanA=finite(Math.max(...clusterA.high.filter(Number.isFinite))-Math.min(...clusterA.low.filter(Number.isFinite)),.20);
-    const spanB=finite(Math.max(...clusterB.high.filter(Number.isFinite))-Math.min(...clusterB.low.filter(Number.isFinite)),.20);
-    const futureSpan=Math.max(.02,spanA,spanB);
-    const historyCandles=scaleHistoryCandles(lastResult.displayCandles, futureSpan);
+    const active=lastResult.clusters[selectedModel], ghost=lastResult.clusters[selectedModel===0?1:0];
+    const historyCandles=anchorHistoryCandles(lastResult.displayCandles);
     const activePath=active.path;
     const ghostPath=ghost.path;
     const activeMeta=lastResult.simMeta?.[active.medoid];
     const ghostMeta=lastResult.simMeta?.[ghost.medoid];
-    const activeCandles=(activeMeta?.candles?.length===activePath.length-1)
+    const rawActive=(activeMeta?.candles?.length===activePath.length-1)
       ? activeMeta.candles
       : intrabarCandlesFromPath(activePath, activeMeta?.intradayPhases, lastResult.visual, 0.82);
-    const ghostCandles=(ghostMeta?.candles?.length===ghostPath.length-1)
+    const rawGhost=(ghostMeta?.candles?.length===ghostPath.length-1)
       ? ghostMeta.candles
       : intrabarCandlesFromPath(ghostPath, ghostMeta?.intradayPhases, lastResult.visual, 0.76);
+    const anchor=historyCandles.length ? historyCandles[historyCandles.length-1].c : 1;
+    const activeCandles=stitchForecastCandles(rawActive,anchor);
+    const ghostCandles=stitchForecastCandles(rawGhost,anchor);
+    validateCandleSeries(historyCandles,'history');
+    validateCandleSeries(activeCandles,'forecast');
+    if(historyCandles.length && activeCandles.length && Math.abs(historyCandles[historyCandles.length-1].c-activeCandles[0].o)>1e-8){
+      console.warn('[chart] history/forecast seam is not continuous');
+    }
     return {historyCandles, activeCandles, ghostCandles, active, ghost, activePath, ghostPath, activeMeta, ghostMeta};
   }
 
@@ -2686,133 +2744,102 @@
     return name||'реакция';
   }
 
-  function fitPreviewCrop(crop, targetW, targetH){
-    const sourceW=Math.max(1,crop.x1-crop.x0), sourceH=Math.max(1,crop.y1-crop.y0);
-    const targetAspect=targetW/Math.max(1,targetH), sourceAspect=sourceW/sourceH;
-    let x0=crop.x0, y0=crop.y0, w=sourceW, h=sourceH;
-    if(sourceAspect>targetAspect){
-      const wantedW=sourceH*targetAspect;
-      // держим правый край — последние свечи важнее старых
-      x0=crop.x1-wantedW;
-      w=wantedW;
-    } else if(sourceAspect<targetAspect){
-      const wantedH=sourceW/targetAspect;
-      const centerY=(crop.y0+crop.y1)/2;
-      y0=centerY-wantedH/2;
-      h=wantedH;
-    }
-    return {x0,y0,w,h};
-  }
-
   function draw(){
     const {w,h}=resizeCanvas();
     ctx.clearRect(0,0,w,h); ctx.fillStyle=COLORS.bg; ctx.fillRect(0,0,w,h);
-    ctx.strokeStyle=COLORS.grid; ctx.lineWidth=1;
-    for(let i=1;i<6;i++){ const y=(h/6)*i; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
-    for(let i=1;i<10;i++){ const x=(w/10)*i; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
-    if(!lastResult) return;
+    if(!lastResult){
+      ctx.strokeStyle=COLORS.grid; ctx.lineWidth=1;
+      for(let i=1;i<6;i++){ const y=(h/6)*i; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+      for(let i=1;i<10;i++){ const x=(w/10)*i; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+      return;
+    }
 
     const {historyCandles, activeCandles, ghostCandles, active, activeMeta}=getScenarioVisuals();
-    const left=18, axisW=Math.max(64, Math.min(92, w*.11)), right=w-axisW, historyRatio=0.46, splitX=left+(right-left)*historyRatio;
+    if(!historyCandles.length || !activeCandles.length) return;
+
+    const left=18, axisW=Math.max(64, Math.min(92, w*.11)), right=w-axisW;
     const topPad=78, bottomPad=24, plotBottom=h-bottomPad;
-    const preview=lastResult.displayBase?.previewCanvas;
-    const crop=lastResult.displayBase?.previewCrop;
-    const previewUsable=!!(preview && crop && crop.x1>crop.x0 && crop.y1>crop.y0);
+    const totalCount=historyCandles.length+activeCandles.length;
+    const plotW=Math.max(1,right-left);
+    const step=plotW/Math.max(1,totalCount);
+    const splitX=left+step*historyCandles.length;
 
-    let currentY;
-    if(previewUsable){
-      const frac=clamp(lastResult.displayBase.lastCloseFraction ?? .52,.06,.94);
-      currentY=topPad + frac*(plotBottom-topPad);
-      ctx.save();
-      ctx.beginPath(); ctx.rect(left,topPad,Math.max(1,splitX-left),Math.max(1,plotBottom-topPad)); ctx.clip();
-      const fitted=fitPreviewCrop(crop,Math.max(1,splitX-left),Math.max(1,plotBottom-topPad));
-      ctx.drawImage(
-        preview,
-        fitted.x0,fitted.y0,fitted.w,fitted.h,
-        left,topPad,Math.max(1,splitX-left),Math.max(1,plotBottom-topPad)
-      );
-      // лёгкое затемнение делает исходный скрин и прогноз визуально одной сценой
-      ctx.fillStyle='rgba(3,5,8,.10)'; ctx.fillRect(left,topPad,splitX-left,plotBottom-topPad);
-      ctx.restore();
+    // Одна стабильная Y-шкала для истории и обеих моделей: переключение A/B не дёргает историю.
+    const scaleCandles=[...historyCandles,...activeCandles,...ghostCandles];
+    let yLo=Math.min(...scaleCandles.map(c=>c.l).filter(Number.isFinite));
+    let yHi=Math.max(...scaleCandles.map(c=>c.h).filter(Number.isFinite));
+    if(!Number.isFinite(yLo)||!Number.isFinite(yHi)||yHi<=yLo){ yLo=.9; yHi=1.1; }
+    const baseRange=Math.max(.018,yHi-yLo);
+    const pad=baseRange*.085;
+    yLo-=pad; yHi+=pad;
+    const yMap=p=>topPad+(yHi-finite(p,1))/(yHi-yLo)*(plotBottom-topPad);
+    const invY=y=>finite(yHi-(y-topPad)/(plotBottom-topPad)*(yHi-yLo),1);
+    const currentValue=historyCandles[historyCandles.length-1].c;
+    const currentY=clamp(yMap(currentValue),topPad,plotBottom);
+
+    // Grid рисуется один раз на весь единый график.
+    ctx.strokeStyle=COLORS.grid; ctx.lineWidth=1;
+    for(let i=0;i<=5;i++){
+      const y=topPad+((plotBottom-topPad)/5)*i;
+      ctx.beginPath(); ctx.moveTo(left,y); ctx.lineTo(right,y); ctx.stroke();
+    }
+    const verticalEvery=Math.max(6,Math.round(totalCount/9));
+    for(let i=verticalEvery;i<totalCount;i+=verticalEvery){
+      const x=left+step*i;
+      ctx.beginPath(); ctx.moveTo(x,topPad); ctx.lineTo(x,plotBottom); ctx.stroke();
     }
 
-    const futureLows=[1,...activeCandles.map(c=>c.l)].filter(Number.isFinite);
-    const futureHighs=[1,...activeCandles.map(c=>c.h)].filter(Number.isFinite);
-    let fLo=Math.min(...futureLows), fHi=Math.max(...futureHighs);
-    if(!Number.isFinite(fLo)||!Number.isFinite(fHi)||fHi<=fLo){ fLo=.92; fHi=1.08; }
-    const rawRange=Math.max(.012,fHi-fLo);
-    fLo-=rawRange*.10; fHi+=rawRange*.10;
-
-    if(!Number.isFinite(currentY)) currentY=topPad+(plotBottom-topPad)*.50;
-    currentY=clamp(currentY,topPad+18,plotBottom-18);
-    const upSpan=Math.max(.001,fHi-1), downSpan=Math.max(.001,1-fLo);
-    const upScale=(currentY-topPad)/upSpan;
-    const downScale=(plotBottom-currentY)/downSpan;
-    let pxPerUnit=Math.min(upScale,downScale)*.92;
-    if(!Number.isFinite(pxPerUnit)||pxPerUnit<=0) pxPerUnit=(plotBottom-topPad)/Math.max(.02,fHi-fLo)*.82;
-    const yMap=p=>currentY-(finite(p,1)-1)*pxPerUnit;
-    const invY=y=>finite(1+(currentY-y)/pxPerUnit,1);
-
-    if(!previewUsable){
-      drawCandles(historyCandles,left,splitX,{up:COLORS.histUp,down:COLORS.histDown,wickUp:COLORS.histUp,wickDown:COLORS.histDown},yMap);
-    }
-
-    // будущее всегда рисуется по собственной 15m шкале и начинается точно от текущего состояния
-    drawCandles(activeCandles,splitX,right,{up:COLORS.up,down:COLORS.down,wickUp:COLORS.up,wickDown:COLORS.down},yMap);
+    // Один и тот же candle renderer, один X-step и один yMap для истории и прогноза.
+    drawCandles(historyCandles,0,totalCount,left,right,{up:COLORS.histUp,down:COLORS.histDown,wickUp:COLORS.histUp,wickDown:COLORS.histDown},yMap);
+    drawCandles(activeCandles,historyCandles.length,totalCount,left,right,{up:COLORS.up,down:COLORS.down,wickUp:COLORS.up,wickDown:COLORS.down},yMap);
 
     ctx.save();
-    ctx.strokeStyle=COLORS.marker; ctx.setLineDash([5,6]);
-    ctx.beginPath(); ctx.moveTo(splitX,topPad-10); ctx.lineTo(splitX,plotBottom); ctx.stroke();
-    // мягкий переход между оригинальным скрином и прогнозом
-    const grad=ctx.createLinearGradient(splitX-20,0,splitX+18,0);
-    grad.addColorStop(0,'rgba(5,7,10,0)'); grad.addColorStop(.55,'rgba(5,7,10,.55)'); grad.addColorStop(1,'rgba(5,7,10,0)');
-    ctx.fillStyle=grad; ctx.fillRect(splitX-20,topPad,38,plotBottom-topPad);
+    ctx.strokeStyle='rgba(129,140,158,.52)'; ctx.lineWidth=1; ctx.setLineDash([4,5]);
+    ctx.beginPath(); ctx.moveTo(splitX,topPad-8); ctx.lineTo(splitX,plotBottom); ctx.stroke();
     ctx.restore();
 
     const phases=phaseSegments(activeMeta?.intradayPhases);
     if(phases.length){
-      const futureW=right-splitX;
-      const total=Math.max(1,activeMeta.intradayPhases.length);
       ctx.save();
       ctx.font="9px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.textBaseline='top';
       for(const seg of phases){
-        const sx=splitX + futureW*(seg.start/total);
-        const ex=splitX + futureW*(seg.end/total);
+        const sx=splitX+step*seg.start;
+        const ex=splitX+step*seg.end;
         if(seg.start>0){
-          ctx.strokeStyle='rgba(108,120,139,.24)';
+          ctx.strokeStyle='rgba(108,120,139,.22)';
           ctx.setLineDash([2,4]);
           ctx.beginPath(); ctx.moveTo(sx,topPad); ctx.lineTo(sx,plotBottom); ctx.stroke();
         }
-        if(ex-sx>44){
+        if(ex-sx>48){
           ctx.setLineDash([]);
-          ctx.fillStyle='rgba(158,168,185,.78)';
+          ctx.fillStyle='rgba(158,168,185,.76)';
           ctx.textAlign='center';
-          ctx.fillText(shortPhaseLabel(seg.name), (sx+ex)/2, topPad-16);
+          ctx.fillText(shortPhaseLabel(seg.name),(sx+ex)/2,topPad-16);
         }
       }
       ctx.restore();
     }
 
-    ctx.fillStyle=COLORS.current; ctx.beginPath(); ctx.arc(splitX,currentY,4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=COLORS.current; ctx.beginPath(); ctx.arc(splitX,currentY,3.6,0,Math.PI*2); ctx.fill();
 
     const currentPrice=getCurrentPrice();
     ctx.save();
-    ctx.strokeStyle='rgba(220,226,236,.36)';
+    ctx.strokeStyle='rgba(220,226,236,.34)';
     ctx.setLineDash([4,5]);
-    ctx.beginPath(); ctx.moveTo(Math.max(left,splitX-14),currentY); ctx.lineTo(right,currentY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(left,currentY); ctx.lineTo(right,currentY); ctx.stroke();
     ctx.restore();
 
     ctx.font="11px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline='middle';
     for(let i=0;i<=5;i++){
-      const y=topPad + ((plotBottom-topPad)/5)*i;
+      const y=topPad+((plotBottom-topPad)/5)*i;
       const normalized=invY(y);
       const label=currentPrice
         ? formatPrice(currentPrice*normalized)
         : `${((normalized-1)*100)>=0?'+':''}${((normalized-1)*100).toFixed(1)}%`;
       ctx.strokeStyle=COLORS.marker; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(right+4,y); ctx.lineTo(right+10,y); ctx.stroke();
-      ctx.fillStyle=COLORS.text; ctx.textAlign='left'; ctx.fillText(label, right+14, y);
+      ctx.fillStyle=COLORS.text; ctx.textAlign='left'; ctx.fillText(label,right+14,y);
     }
 
     const currentLabel=currentPrice ? formatPrice(currentPrice) : '0.0%';
@@ -2823,19 +2850,19 @@
     ctx.textAlign='center';
     ctx.fillText(currentLabel,right+5+currentBoxW/2,currentY+0.5);
 
-    function pill(text, x, y, align='left'){
+    function pill(text,x,y,align='left'){
       ctx.font="11px ui-monospace, SFMono-Regular, Menlo, monospace";
-      const padX=8, boxH=22, tw=ctx.measureText(text).width, boxW=tw + padX*2;
-      const bx=align==='right' ? x-boxW : x;
+      const padX=8, boxH=22, tw=ctx.measureText(text).width, boxW=tw+padX*2;
+      const bx=align==='right'?x-boxW:x;
       ctx.fillStyle='rgba(8,10,14,.90)';
       ctx.strokeStyle=COLORS.marker; ctx.lineWidth=1;
-      ctx.fillRect(bx, y, boxW, boxH); ctx.strokeRect(bx, y, boxW, boxH);
-      ctx.fillStyle=COLORS.text; ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillText(text, bx+padX, y+boxH/2+0.5);
+      ctx.fillRect(bx,y,boxW,boxH); ctx.strokeRect(bx,y,boxW,boxH);
+      ctx.fillStyle=COLORS.text; ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillText(text,bx+padX,y+boxH/2+0.5);
     }
 
-    pill(`ИСТОРИЯ · ${lastResult.displayBase.tfLabel}${previewUsable?' · оригинал':''}`, left, 10, 'left');
-    pill('ПРОГНОЗ · 15m · выбранная модель', right-6, 10, 'right');
-    pill(`АКТИВНАЯ МОДЕЛЬ: ${selectedModel===0?'A':'B'} · ${(active.prob*100).toFixed(1)}%`, right-6, 36, 'right');
+    pill(`ИСТОРИЯ · ${lastResult.displayBase.tfLabel} · реконструкция`,left,10,'left');
+    pill('ПРОГНОЗ · 15m · выбранная модель',right-6,10,'right');
+    pill(`АКТИВНАЯ МОДЕЛЬ: ${selectedModel===0?'A':'B'} · ${(active.prob*100).toFixed(1)}%`,right-6,36,'right');
   }
 
   function updateMetrics(visual, confidence){
