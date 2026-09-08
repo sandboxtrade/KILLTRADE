@@ -262,8 +262,6 @@
     down: "#ff5a6c",
     histUp: "#39e38b",
     histDown: "#ff5f70",
-    ghostUp: "rgba(57,227,139,.24)",
-    ghostDown: "rgba(255,95,112,.24)",
     text: "#8c97aa",
     current: "#f4f6fb"
   };
@@ -280,7 +278,40 @@
     const pos=(a.length-1)*q, lo=Math.floor(pos), hi=Math.ceil(pos);
     return lo===hi ? a[lo] : lerp(a[lo], a[hi], pos-lo);
   }
-  function gauss(){ let u=0,v=0; while(u===0) u=Math.random(); while(v===0) v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+
+  // Deterministic PRNG for reproducible Monte-Carlo runs.
+  // The same input/settings produce the same scenarios, which makes regression testing possible.
+  let rngState=(Date.now()>>>0)||0x9e3779b9;
+  let activeRunSeed=rngState;
+  function setRunSeed(seed){
+    const s=(Number(seed)>>>0)||0x9e3779b9;
+    activeRunSeed=s;
+    rngState=s;
+    return s;
+  }
+  function rand(){
+    let t=rngState+=0x6D2B79F5;
+    t=Math.imul(t^(t>>>15),t|1);
+    t^=t+Math.imul(t^(t>>>7),t|61);
+    return ((t^(t>>>14))>>>0)/4294967296;
+  }
+  function mixSeed(base,index){
+    let x=((base>>>0) ^ Math.imul((index+1)>>>0,0x9E3779B1))>>>0;
+    x^=x>>>16; x=Math.imul(x,0x85EBCA6B); x^=x>>>13; x=Math.imul(x,0xC2B2AE35); x^=x>>>16;
+    return (x>>>0)||0xA341316C;
+  }
+  function hashStringToSeed(value){
+    const s=String(value??'');
+    let h=2166136261>>>0;
+    for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619); }
+    return h>>>0;
+  }
+  function buildAnalysisSeed(recog,profile,simulations,horizon){
+    const signature=(recog?.displayCandles||[]).slice(-40).map(c=>[c.o,c.h,c.l,c.c].map(v=>finite(v,0).toFixed(5)).join(',')).join('|');
+    const tfSignature=(recog?.extracted||[]).map(e=>`${e.tf}:${e.path?.length||0}:${finite(e.confidence,0).toFixed(3)}`).sort().join('|');
+    return hashStringToSeed(`${profile}|${simulations}|${horizon}|${signature}|${tfSignature}`);
+  }
+  function gauss(){ let u=0,v=0; while(u===0) u=rand(); while(v===0) v=rand(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
   function sigmoid(x){ return 1/(1+Math.exp(-x)); }
   function softmax3(buy,hold,sell){ const m=Math.max(buy,hold,sell), eb=Math.exp(buy-m), eh=Math.exp(hold-m), es=Math.exp(sell-m), z=eb+eh+es; return [eb/z,eh/z,es/z]; }
   function smooth(values,radius=3){
@@ -332,12 +363,14 @@
 
   function inferTimeframe(name){
     const s=(name||"").toLowerCase();
-    if(/(^|[^\d])5\s*m|5мин|m5|5m/.test(s)) return "m5";
-    if(/(^|[^\d])15\s*m|15мин|m15|15m/.test(s)) return "m15";
-    if(/1\s*h|1ч|h1|1h/.test(s)) return "h1";
-    if(/4\s*h|4ч|h4|4h/.test(s)) return "h4";
-    if(/1\s*d|1д|d1|1d/.test(s)) return "d1";
-    return "h1";
+    // Match longer/less ambiguous tokens first. Bare "5m" must never match inside "15m".
+    const has=(re)=>re.test(s);
+    if(has(/(?:^|[^a-z0-9])(?:15\s*m|m15|15мин(?:ут)?)(?=$|[^a-z0-9])/i)) return "m15";
+    if(has(/(?:^|[^a-z0-9])(?:5\s*m|m5|5мин(?:ут)?)(?=$|[^a-z0-9])/i)) return "m5";
+    if(has(/(?:^|[^a-z0-9])(?:1\s*h|h1|1ч|1час)(?=$|[^a-z0-9])/i)) return "h1";
+    if(has(/(?:^|[^a-z0-9])(?:4\s*h|h4|4ч|4часа?)(?=$|[^a-z0-9])/i)) return "h4";
+    if(has(/(?:^|[^a-z0-9])(?:1\s*d|d1|1д|1день)(?=$|[^a-z0-9])/i)) return "d1";
+    return "auto";
   }
 
   async function fileToImage(file){
@@ -365,12 +398,11 @@
 
   function estimateBounds(dataObj){
     const {w,h,data}=dataObj;
-    const x0=Math.round(w*0.07), x1=Math.round(w*0.88);
-    const y0=Math.round(h*0.10), y1=Math.round(h*0.78); // ignore volume panel at bottom for crypto app screenshots
+    const broad={x0:Math.round(w*.025),x1:Math.round(w*.955),y0:Math.round(h*.045),y1:Math.round(h*.92)};
 
     const rs=[],gs=[],bs=[];
-    for(let y=y0;y<y1;y+=Math.max(4,Math.floor(h/80))){
-      for(let x=x0;x<x1;x+=Math.max(4,Math.floor(w/120))){
+    for(let y=broad.y0;y<broad.y1;y+=Math.max(4,Math.floor(h/90))){
+      for(let x=broad.x0;x<broad.x1;x+=Math.max(4,Math.floor(w/130))){
         const i=(y*w+x)*4; rs.push(data[i]); gs.push(data[i+1]); bs.push(data[i+2]);
       }
     }
@@ -381,8 +413,32 @@
       const dr=data[i]-bg[0], dg=data[i+1]-bg[1], db=data[i+2]-bg[2];
       const chroma=Math.max(data[i],data[i+1],data[i+2])-Math.min(data[i],data[i+1],data[i+2]);
       const lum=Math.sqrt(dr*dr+dg*dg+db*db);
-      return lum + chroma*0.35;
+      return lum + chroma*.35;
     };
+    const colorLike=(x,y)=>{
+      const i=(y*w+x)*4, r=data[i],g=data[i+1],b=data[i+2];
+      const lum=(r+g+b)/3;
+      const green=g>r+15 && g>b+6 && (g-bg[1])>22 && lum>38;
+      const red=r>g+15 && r>b+6 && (r-bg[0])>22 && lum>38;
+      return green||red;
+    };
+
+    // First use candle-like colour pixels to estimate the chart rectangle. This removes the old hard 7–88% / 10–78% crop.
+    const colorXs=[],colorYs=[];
+    for(let y=broad.y0;y<broad.y1;y+=2){
+      for(let x=broad.x0;x<broad.x1;x+=2){
+        if(colorLike(x,y)){ colorXs.push(x); colorYs.push(y); }
+      }
+    }
+    let x0=broad.x0,x1=broad.x1,y0=broad.y0,y1=broad.y1;
+    if(colorXs.length>=40){
+      x0=clamp(Math.floor(quantile(colorXs,.01)-w*.018),broad.x0,broad.x1-20);
+      x1=clamp(Math.ceil(quantile(colorXs,.99)+w*.018),x0+20,broad.x1);
+      // Ignore the extreme bottom tail: on many exchanges that is the volume panel.
+      const q02=quantile(colorYs,.02), q92=quantile(colorYs,.92);
+      y0=clamp(Math.floor(q02-h*.035),broad.y0,broad.y1-30);
+      y1=clamp(Math.ceil(q92+h*.045),y0+30,broad.y1);
+    }
 
     const colActivity=[];
     for(let x=x0;x<x1;x+=2){
@@ -393,9 +449,9 @@
     const actVals=colActivity.map(d=>d.active);
     const threshold=Math.max(2, quantile(actVals,.62));
     const activeCols=colActivity.filter(d=>d.active>=threshold).map(d=>d.x);
-    const ax0=activeCols.length ? Math.max(x0, quantile(activeCols,.02)) : x0;
-    const ax1=activeCols.length ? Math.min(x1, quantile(activeCols,.98)) : x1;
-    return {w,h,data,bg,contrastAt,x0:ax0,x1:ax1,y0,y1,colActivity};
+    const ax0=activeCols.length ? Math.max(x0, quantile(activeCols,.015)) : x0;
+    const ax1=activeCols.length ? Math.min(x1, quantile(activeCols,.985)) : x1;
+    return {w,h,data,bg,contrastAt,x0:ax0,x1:ax1,y0,y1,colActivity,boundsSource:colorXs.length>=40?'color':'contrast'};
   }
 
   function extractPath(bounds){
@@ -486,14 +542,15 @@
     }
     if(run) raw.push(run);
 
-    let segments=raw.filter(s => (s.end-s.start+1)>=1 && (s.end-s.start+1)<=42);
+    const maxMergedWidth=Math.max(42,Math.min(160,Math.round((x1-x0)*.28)));
+    let segments=raw.filter(s => (s.end-s.start+1)>=1 && (s.end-s.start+1)<=maxMergedWidth);
     const narrowWidths=segments.map(s=>s.end-s.start+1).filter(w=>w<=16);
     const typicalWidth=Math.max(2, narrowWidths.length ? quantile(narrowWidths,.50) : 5);
     const splitSegments=[];
     for(const s of segments){
       const width=s.end-s.start+1;
       if(width <= typicalWidth*2.80){ splitSegments.push(s); continue; }
-      const n=clamp(Math.round(width/Math.max(2,typicalWidth+1)),2,2);
+      const n=clamp(Math.round(width/Math.max(2,typicalWidth+1)),2,12);
       for(let k=0;k<n;k++){
         const a=Math.round(s.start + k*width/n);
         const b=Math.round(s.start + (k+1)*width/n)-1;
@@ -564,8 +621,20 @@
       else if(run){ raw.push(run); run=null; }
     }
     if(run) raw.push(run);
-    let segments=mergeSegments(raw,2).filter(s => (s.end-s.start+1)>=1 && (s.end-s.start+1)<=24);
-    segments=segments.filter(s => {
+    let segments=mergeSegments(raw,2).filter(s => (s.end-s.start+1)>=1 && (s.end-s.start+1)<=Math.max(36,Math.min(140,Math.round((x1-x0)*.24))));
+    const rawWidths=segments.map(s=>s.end-s.start+1).filter(w=>w<=14);
+    const rawTypical=Math.max(2,rawWidths.length?quantile(rawWidths,.50):5);
+    const splitRaw=[];
+    for(const s of segments){
+      const width=s.end-s.start+1;
+      if(width<=rawTypical*2.7){ splitRaw.push(s); continue; }
+      const n=clamp(Math.round(width/Math.max(2,rawTypical+1)),2,12);
+      for(let k=0;k<n;k++){
+        const a=Math.round(s.start+k*width/n),b=Math.round(s.start+(k+1)*width/n)-1;
+        if(b>=a) splitRaw.push({start:a,end:b});
+      }
+    }
+    segments=splitRaw.filter(s => {
       const mid=(s.start+s.end)/2;
       const px=x0+mid;
       let verticalSpread=[];
@@ -619,16 +688,24 @@
     const colorCand=extractColoredCandles(bounds);
     const cand=(colorCand.candles.length && colorCand.confidence >= rawCand.confidence*0.80) ? colorCand : rawCand;
     const tf = item.tf === 'auto' ? inferTimeframe(item.file.name) : item.tf;
+    const rawContinuity=rawContinuityScore(cand.candles);
     const historyCandles = cand.candles.length ? normalizeCandles(cand.candles) : [];
-    const path = historyCandles.length ? normalizePath(historyCandles.map(c=>c.c)) : line.path;
-    const confidence = Math.max(line.confidence*0.66, cand.confidence*0.98);
+    const candlePath=historyCandles.length ? normalizePath(historyCandles.map(c=>c.c)) : [];
+    const path = candlePath.length ? candlePath : line.path;
+    const agreement=pathAgreementScore(candlePath,line.path);
+    const countQuality=clamp(historyCandles.length/28,0,1);
+    const candleConfidence=clamp(cand.confidence*.70 + rawContinuity*.15 + agreement*.10 + countQuality*.05,0,.94);
+    let confidence=clamp(line.confidence*.34 + candleConfidence*.46 + agreement*.12 + rawContinuity*.08,0,.94);
+    if(historyCandles.length<10) confidence=Math.min(confidence,.72);
     return {
       name:item.file.name,
       tf,
       tfLabel:TF_META[tf]?.label || tf,
       path,
       lineConfidence:line.confidence,
-      candleConfidence:cand.confidence,
+      candleConfidence,
+      rawContinuity,
+      pathAgreement:agreement,
       confidence,
       candles:historyCandles,
       sourceWidth:dataObj.w,
@@ -636,17 +713,155 @@
     };
   }
 
+  function reconstructContinuousCandles(candles){
+    const clean=(candles||[]).filter(c=>c && [c.o,c.h,c.l,c.c].every(Number.isFinite));
+    if(!clean.length) return [];
+    const out=[];
+    let prevClose=null;
+    for(const raw of clean){
+      if(prevClose===null){
+        const o=raw.o,c=raw.c;
+        out.push({o,h:Math.max(raw.h,o,c),l:Math.min(raw.l,o,c),c});
+        prevClose=c;
+        continue;
+      }
+      // Screenshots of continuous crypto markets should not contain gaps between adjacent 15m/5m candles.
+      // Preserve the detected body/wicks, but translate the whole candle so open == previous close.
+      const delta=prevClose-raw.o;
+      const o=prevClose,c=raw.c+delta,h=raw.h+delta,l=raw.l+delta;
+      out.push({o,h:Math.max(h,o,c),l:Math.min(l,o,c),c});
+      prevClose=c;
+    }
+    return out;
+  }
+
+  function rawContinuityScore(candles){
+    const clean=(candles||[]).filter(c=>c && [c.o,c.h,c.l,c.c].every(Number.isFinite));
+    if(clean.length<2) return .35;
+    const hi=Math.max(...clean.map(c=>c.h)), lo=Math.min(...clean.map(c=>c.l)), range=Math.max(1e-6,hi-lo);
+    const gaps=[];
+    for(let i=1;i<clean.length;i++) gaps.push(Math.abs(clean[i].o-clean[i-1].c)/range);
+    return clamp(1-quantile(gaps,.75)*10,0,1);
+  }
+
+  function pathAgreementScore(a,b){
+    if(!a?.length || !b?.length) return .25;
+    const n=48, aa=resample(normalizePath(a),n), bb=resample(normalizePath(b),n);
+    const mae=mean(aa.map((v,i)=>Math.abs(v-bb[i])));
+    return clamp(1-mae*2.4,0,1);
+  }
+
   function normalizeCandles(candles){
-    if(!candles.length) return [];
-    const lastClose=candles[candles.length-1].c;
-    const highs=candles.map(c=>c.h), lows=candles.map(c=>c.l);
+    const continuous=reconstructContinuousCandles(candles);
+    if(!continuous.length) return [];
+    const lastClose=continuous[continuous.length-1].c;
+    const highs=continuous.map(c=>c.h), lows=continuous.map(c=>c.l);
     const range=Math.max(1e-6, Math.max(...highs)-Math.min(...lows));
-    return candles.map(c=>({
+    return continuous.map(c=>({
       o:(c.o-lastClose)/range,
       h:(c.h-lastClose)/range,
       l:(c.l-lastClose)/range,
       c:(c.c-lastClose)/range
     }));
+  }
+
+  function deriveHistoryVolatility(candles){
+    const clean=(candles||[]).filter(c=>c && [c.o,c.h,c.l,c.c].every(Number.isFinite));
+    if(clean.length<2){
+      return {
+        medianRange:.16,
+        p75Range:.24,
+        p90Range:.34,
+        medianBody:.08,
+        jumpSigma:.08,
+        burstRate:.18,
+        reversalRate:.34,
+        avgStreak:2.3,
+        volatilityScale:1.0,
+        burstScale:1.0,
+        reversionScale:1.0
+      };
+    }
+
+    const ranges=[];
+    const bodies=[];
+    const jumps=[];
+    const absJumps=[];
+    const streaks=[];
+    let flips=0;
+    let prevSign=0;
+    let currentStreak=0;
+
+    for(let i=0;i<clean.length;i++){
+      const c=clean[i];
+      const candleRange=Math.max(1e-6, c.h-c.l);
+      const body=Math.abs(c.c-c.o);
+      const delta=i===0 ? (c.c-c.o) : (c.c-clean[i-1].c);
+      const sign=Math.sign(delta);
+      ranges.push(candleRange);
+      bodies.push(body);
+      jumps.push(delta);
+      absJumps.push(Math.abs(delta));
+      if(sign){
+        if(prevSign && sign!==prevSign) flips++;
+        if(sign===prevSign) currentStreak+=1;
+        else {
+          if(currentStreak) streaks.push(currentStreak);
+          currentStreak=1;
+          prevSign=sign;
+        }
+      }
+    }
+    if(currentStreak) streaks.push(currentStreak);
+
+    const burstThreshold=Math.max(quantile(ranges,.82), quantile(absJumps,.84));
+    const burstCount=clean.filter((c,i)=>Math.max(ranges[i],absJumps[i])>=burstThreshold).length;
+    const medianRange=quantile(ranges,.50);
+    const p75Range=quantile(ranges,.75);
+    const p90Range=quantile(ranges,.90);
+    const medianBody=quantile(bodies,.50);
+    const jumpSigma=std(jumps);
+    const burstRate=burstCount/Math.max(1,clean.length);
+    const reversalRate=flips/Math.max(1,clean.length-1);
+    const avgStreak=mean(streaks)||1;
+    const volatilityScale=clamp(.78 + medianRange*1.9 + p90Range*1.4 + burstRate*.85 + jumpSigma*1.25, .76, 2.65);
+    const burstScale=clamp(.72 + p90Range*2.0 + burstRate*1.8 + jumpSigma*1.45, .70, 3.4);
+    const reversionScale=clamp(.80 + reversalRate*.90 + Math.max(0,2.6-avgStreak)*.10, .72, 1.9);
+
+    return {medianRange,p75Range,p90Range,medianBody,jumpSigma,burstRate,reversalRate,avgStreak,volatilityScale,burstScale,reversionScale};
+  }
+
+  function pathVolatilityStats(path){
+    const clean=(path||[]).map((v,i)=>finitePositive(v,i?finitePositive(path[i-1],1):1));
+    const rets=clean.slice(1).map((v,i)=>Math.log(finitePositive(v,clean[i])/finitePositive(clean[i],1))).filter(Number.isFinite);
+    if(!rets.length){
+      return {realizedVol:0,p90Abs:0,maxAbs:0,burstRate:0,signFlipRate:0,avgStreak:1};
+    }
+    const absRets=rets.map(v=>Math.abs(v));
+    const threshold=Math.max(quantile(absRets,.84), mean(absRets)+std(absRets)*.45);
+    let flips=0, prevSign=0, currentStreak=0;
+    const streaks=[];
+    for(const r of rets){
+      const sign=Math.sign(r);
+      if(sign){
+        if(prevSign && sign!==prevSign) flips++;
+        if(sign===prevSign) currentStreak+=1;
+        else {
+          if(currentStreak) streaks.push(currentStreak);
+          currentStreak=1;
+          prevSign=sign;
+        }
+      }
+    }
+    if(currentStreak) streaks.push(currentStreak);
+    return {
+      realizedVol:std(rets),
+      p90Abs:quantile(absRets,.90),
+      maxAbs:Math.max(...absRets),
+      burstRate:absRets.filter(v=>v>=threshold).length/Math.max(1,absRets.length),
+      signFlipRate:flips/Math.max(1,rets.length-1),
+      avgStreak:mean(streaks)||1
+    };
   }
 
   function deriveVisualState(path){
@@ -786,7 +1001,7 @@
   }
 
   function sampleRegime(regimes){
-    let r=Math.random();
+    let r=rand();
     for(const item of regimes){
       r-=item.prob;
       if(r<=0) return item.id;
@@ -820,7 +1035,7 @@
       const prior=MARKET_STATE_PRIORS[p.name] || {load:.5,pnl:0};
       const isFresh=p.name==='freshPositions', isLoss=p.name==='lossPositions', isProfitable=p.name==='profitablePositions';
       const isEarlyProfit=p.name==='earlyProfitPositions', isFast=p.name==='fastFlow', isMechanical=p.name==='mechanicalFlow';
-      const isLiquidity=p.name==='liquidityBuffer', isOutside=p.name==='outsideCapital';
+      const isOutside=p.name==='outsideCapital';
 
       let load=prior.load;
       load += fomo*((isFresh?.18:0)+(isLoss?.14:0)+(isFast?.10:0));
@@ -909,11 +1124,11 @@
   }
 
   function maybeTransitionRegime(m, ret, imbalance, step){
-    if(step<3 || Math.random()>.085) return;
+    if(step<3 || rand()>.085) return;
     const v=m.visual;
     const r=m.regime;
 
-    if(r==='fomo_chase' && (ret<-.006 || (v.distributionRisk>.62 && Math.random()<.55))){
+    if(r==='fomo_chase' && (ret<-.006 || (v.distributionRisk>.62 && rand()<.55))){
       m.regime='distribution'; return;
     }
     if(r==='distribution' && ret<-.007 && (v.crowdStress>.50 || imbalance>.48)){
@@ -958,8 +1173,7 @@
   function explainSimulationCount(value){
     if(value <= 1500) return 'Меньше симуляций: быстрее расчёт, но вероятности грубее и сценарии шумнее.';
     if(value <= 4000) return '3 000 — хороший баланс между скоростью и стабильностью результата.';
-    if(value <= 7000) return 'Больше симуляций: вероятности стабильнее, но расчёт заметно дольше.';
-    return '10 000 — максимально устойчивое усреднение для этой версии, но анализ будет самым медленным.';
+    return '5 000–6 000 — более устойчивое усреднение, но расчёт заметно дольше. Выше 6 000 мобильная версия намеренно не запускает.';
   }
 
   function updateSimulationHint(){
@@ -973,7 +1187,7 @@
 
   function updatePriceMode(){
     const price=getCurrentPrice();
-    if(els.priceModeLabel) els.priceModeLabel.textContent = price ? `реальная шкала · ${formatPrice(price)}` : 'относительная шкала';
+    if(els.priceModeLabel) els.priceModeLabel.textContent = price ? `якорь ${formatPrice(price)} · ось модельная` : 'модельная шкала';
     if(lastResult) draw();
   }
 
@@ -1056,17 +1270,49 @@
     }).sort((a,b)=>b.wavePotential-a.wavePotential);
   }
 
-  function formatCohortRead(cohorts){
-    if(!cohorts?.length) return '—';
-    const buyers=cohorts.filter(c=>c.side==='BUY').sort((a,b)=>b.potential-a.potential);
-    const sellers=cohorts.filter(c=>c.side==='SELL').sort((a,b)=>b.potential-a.potential);
-    const trapped=[...cohorts].sort((a,b)=>(b.load*Math.max(0,-b.pnl))-(a.load*Math.max(0,-a.pnl)))[0];
-    const parts=[];
-    if(sellers[0]) parts.push(`${sellers[0].stateLabel}: ${sellers[0].cohortLabel} чаще даёт разгрузку`);
-    if(buyers[0]) parts.push(`${buyers[0].stateLabel}: ${buyers[0].cohortLabel} чаще поддерживает спрос`);
-    if(trapped && trapped.pnl < -0.03) parts.push(`наибольший риск паники у ${trapped.stateLabel}: ${trapped.cohortLabel} ${formatSignedPct(trapped.pnl)}`);
-    return parts.join('; ') + '.';
+
+  function averageVisualStates(entries){
+    const rows=(entries||[]).filter(Boolean);
+    if(!rows.length) return null;
+    const keys=['momentum','vol','accel','drawdown','persistence','compression','pressureBias','crowdStress','reflexivity','capitulationRisk','absorption','liquidityBufferFragility','distributionRisk','continuityTrace'];
+    const weights=rows.map(r=>Math.max(.05,finite(r.weight,1)));
+    const z=weights.reduce((s,v)=>s+v,0)||1;
+    const out={};
+    for(const key of keys) out[key]=rows.reduce((s,r,i)=>s+finite(r.state?.[key],0)*weights[i],0)/z;
+    out.momentum=clamp(out.momentum,-1,1); out.accel=clamp(out.accel,-1,1); out.pressureBias=clamp(out.pressureBias,-1,1); out.continuityTrace=clamp(out.continuityTrace,-1,1);
+    out.vol=clamp(out.vol,0,1.5);
+    for(const key of ['drawdown','persistence','compression','crowdStress','reflexivity','capitulationRisk','absorption','liquidityBufferFragility','distributionRisk']) out[key]=clamp(out[key],0,1);
+    return out;
   }
+
+  function stateForTimeframe(extracted,tf){
+    const entries=(extracted||[])
+      .filter(e=>e.tf===tf && e.path?.length)
+      .map(e=>({state:deriveVisualState(e.path),weight:.35+.65*clamp(e.confidence,0,1)}));
+    return averageVisualStates(entries);
+  }
+
+  function combineTwoStates(a,b,wa=.7,wb=.3){
+    if(a&&b) return averageVisualStates([{state:a,weight:wa},{state:b,weight:wb}]);
+    return a||b||null;
+  }
+
+  function aggregateCandles(candles,factor){
+    const clean=(candles||[]).filter(c=>c && [c.o,c.h,c.l,c.c].every(Number.isFinite));
+    const n=Math.max(1,Math.floor(factor||1));
+    if(n<=1) return reconstructContinuousCandles(clean);
+    const out=[];
+    // Align groups from the right so the latest M5 close remains the latest 15m close.
+    // An incomplete oldest group is discarded instead of pretending that 5m/10m is a full 15m candle.
+    const remainder=clean.length%n;
+    for(let i=remainder;i<clean.length;i+=n){
+      const seg=clean.slice(i,i+n);
+      if(seg.length!==n) continue;
+      out.push({o:seg[0].o,h:Math.max(...seg.map(c=>c.h)),l:Math.min(...seg.map(c=>c.l)),c:seg[seg.length-1].c});
+    }
+    return reconstructContinuousCandles(out);
+  }
+
 
   async function recognizeAll(fileItems){
     const extracted=[];
@@ -1076,36 +1322,54 @@
     }
     if(!extracted.length) throw new Error("Не удалось выделить график ни на одном изображении.");
 
-    const groups = {
-      m15: extracted.filter(e => e.tf === 'm15'),
-      short: extracted.filter(e => e.tf === 'm5' || e.tf === 'm15'),
-      mid: extracted.filter(e => e.tf === 'h1'),
-      long: extracted.filter(e => e.tf === 'h4' || e.tf === 'd1')
-    };
-    const bestOf = arr => arr.sort((a,b)=>b.confidence-a.confidence)[0] || null;
-    const m15Best=bestOf([...groups.m15]);
-    const shortBest=m15Best || bestOf([...groups.short]);
-    const midBest=bestOf([...groups.mid]);
-    const longBest=bestOf([...groups.long]);
-
-    const shortState=shortBest ? deriveVisualState(shortBest.path) : null;
-    const midState=midBest ? deriveVisualState(midBest.path) : null;
-    const longState=longBest ? deriveVisualState(longBest.path) : null;
-    const visual=mergeStates(shortState, midState, longState) || deriveVisualState((m15Best || bestOf([...extracted])).path);
-
-    const displayBase = m15Best || shortBest || midBest || longBest || extracted[0];
-    let displayCandles = (displayBase.candles || []).slice(-40);
-    if(!displayCandles.length){
-      const displayPath = resample(displayBase.path, 48);
-      displayCandles = pathToCandles(displayPath.map(v=>1+v*0.3), 44, 0.72).map(c=>( { o:c.o-1, h:c.h-1, l:c.l-1, c:c.c-1 }));
+    const unresolved=extracted.filter(e=>e.tf==='auto');
+    if(unresolved.length){
+      const names=unresolved.slice(0,3).map(e=>e.name).join(', ');
+      throw new Error(`Не удалось определить таймфрейм: ${names}${unresolved.length>3?'…':''}. Укажите ТФ вручную для каждого такого скриншота.`);
     }
 
-    const tfSummary = [displayBase && `отрисовка:${displayBase.tfLabel}`, midBest && `контекст:${midBest.tfLabel}`, longBest && `глобально:${longBest.tfLabel}`].filter(Boolean).join(' · ');
-    const confidence = mean(extracted.map(e=>e.confidence));
-    const candleScore = mean(extracted.map(e=>e.candleConfidence));
-    const regimes = inferBehaviorRegimes(visual);
+    const byTf={m5:[],m15:[],h1:[],h4:[],d1:[]};
+    for(const e of extracted) if(byTf[e.tf]) byTf[e.tf].push(e);
+    const bestOf=arr=>[...(arr||[])].sort((a,b)=>b.confidence-a.confidence)[0]||null;
 
-    return { extracted, visual, regimes, confidence, candleScore, displayBase, displayCandles, tfSummary };
+    // Every uploaded timeframe contributes. Multiple screenshots of the same TF are averaged by recognition confidence.
+    const sM5=stateForTimeframe(extracted,'m5');
+    const sM15=stateForTimeframe(extracted,'m15');
+    const sH1=stateForTimeframe(extracted,'h1');
+    const sH4=stateForTimeframe(extracted,'h4');
+    const sD1=stateForTimeframe(extracted,'d1');
+    const shortState=combineTwoStates(sM15,sM5,.72,.28);
+    const midState=sH1;
+    const longState=combineTwoStates(sH4,sD1,.64,.36);
+    const fallbackState=shortState||midState||longState||deriveVisualState(extracted[0].path);
+    const visual=mergeStates(shortState||fallbackState,midState||shortState||fallbackState,longState||midState||shortState||fallbackState) || fallbackState;
+
+    // A 15m forecast must have 15m or 5m history. Higher TFs are context only.
+    const m15Best=bestOf(byTf.m15);
+    const m5Best=bestOf(byTf.m5);
+    const displayBase=m15Best||m5Best;
+    if(!displayBase){
+      throw new Error('Для построения 15m-прогноза нужен хотя бы один скриншот M15 или M5. H1/H4/D1 используются только как контекст.');
+    }
+
+    let displayCandles=(displayBase.candles||[]).slice(-60);
+    if(!displayCandles.length){
+      const displayPath=resample(displayBase.path,displayBase.tf==='m5'?90:48);
+      displayCandles=pathToCandles(displayPath.map(v=>1+v*.3),displayBase.tf==='m5'?72:44,.72).map(c=>({o:c.o-1,h:c.h-1,l:c.l-1,c:c.c-1}));
+    }
+    if(displayBase.tf==='m5') displayCandles=aggregateCandles(displayCandles,3);
+    displayCandles=reconstructContinuousCandles(displayCandles).slice(-40);
+    visual.historyVolatility=deriveHistoryVolatility(displayCandles);
+
+    const used=[];
+    for(const tf of ['m5','m15','h1','h4','d1']) if(byTf[tf].length) used.push(`${TF_META[tf].label}×${byTf[tf].length}`);
+    const tfSummary=`отрисовка:15m${displayBase.tf==='m5'?' (из M5)':''} · использовано: ${used.join(' / ')}`;
+    const weightedConfidence=mean(extracted.map(e=>e.confidence));
+    const confidence=clamp(weightedConfidence,0,.94);
+    const candleScore=clamp(mean(extracted.map(e=>e.candleConfidence)),0,.94);
+    const regimes=inferBehaviorRegimes(visual);
+
+    return {extracted,visual,regimes,confidence,candleScore,displayBase,displayCandles,tfSummary};
   }
 
   function createMarketMemory(){
@@ -1276,16 +1540,16 @@
     const stress=clamp((v.crowdStress||0)*.36 + (v.reflexivity||0)*.28 + (v.liquidityBufferFragility||0)*.22 + Math.abs(primaryBias)*.14,0,1);
     const receivingResource=primaryDir<0 ? reserves.demandShare : reserves.supplyShare;
     const counterProbability=clamp(.24 + stress*.28 + receivingResource*.22 + (v.absorption||0)*.16, .16, .82);
-    const hasCounter=Math.random()<counterProbability;
-    const counterDuration=hasCounter ? clamp(Math.round(2 + Math.random()*5),2,7) : 0;
-    const balanceDuration=clamp(Math.round(3 + (v.compression||0)*4 + Math.random()*4),3,9);
-    const counterStrength=clamp(.26 + stress*.25 + receivingResource*.18 + Math.random()*.16,.22,.74);
-    const releaseStrength=clamp(.26 + Math.abs(primaryBias)*.30 + stress*.15 + Math.random()*.10,.24,.68);
-    const balanceDamping=clamp(.40 + (v.absorption||0)*.20 + Math.random()*.14,.36,.68);
+    const hasCounter=rand()<counterProbability;
+    const counterDuration=hasCounter ? clamp(Math.round(2 + rand()*5),2,7) : 0;
+    const balanceDuration=clamp(Math.round(3 + (v.compression||0)*4 + rand()*4),3,9);
+    const counterStrength=clamp(.26 + stress*.25 + receivingResource*.18 + rand()*.16,.22,.74);
+    const releaseStrength=clamp(.26 + Math.abs(primaryBias)*.30 + stress*.15 + rand()*.10,.24,.68);
+    const balanceDamping=clamp(.40 + (v.absorption||0)*.20 + rand()*.14,.36,.68);
     const minimumAfterBalance=counterDuration+balanceDuration+5;
-    const pauseStart=clamp(Math.round(horizon*(.48 + Math.random()*.22)), minimumAfterBalance, Math.max(minimumAfterBalance,horizon-6));
-    const pauseDuration=horizon>=28 ? clamp(Math.round(2 + Math.random()*5),2,6) : 0;
-    const pauseStrength=clamp(.10 + (v.absorption||0)*.16 + Math.random()*.10,.08,.30);
+    const pauseStart=clamp(Math.round(horizon*(.48 + rand()*.22)), minimumAfterBalance, Math.max(minimumAfterBalance,horizon-6));
+    const pauseDuration=horizon>=28 ? clamp(Math.round(2 + rand()*5),2,6) : 0;
+    const pauseStrength=clamp(.10 + (v.absorption||0)*.16 + rand()*.10,.08,.30);
     return {
       primaryDir,
       primaryBias,
@@ -1298,8 +1562,8 @@
       pauseStart,
       pauseDuration,
       pauseStrength,
-      phaseOffset:Math.random()*Math.PI*2,
-      microOffset:Math.random()*Math.PI*2,
+      phaseOffset:rand()*Math.PI*2,
+      microOffset:rand()*Math.PI*2,
       horizon
     };
   }
@@ -1335,6 +1599,36 @@
     return {phase:'реализация основного дисбаланса',pulse,holdBoost:.10,returnScale:.72+.18*progress};
   }
 
+  function createVolatilityState(profileName, visual, horizon){
+    const hv=visual?.historyVolatility || deriveHistoryVolatility([]);
+    const localVol=clamp(visual?.vol||0,0,1.4);
+    const stepCap=profileName==='microcap' ? .040 : profileName==='midcap' ? .018 : .030;
+    const rawBase=
+      .00115 +
+      localVol*.00155 +
+      clamp(visual?.crowdStress||0,0,1)*.00095 +
+      clamp(visual?.liquidityBufferFragility||0,0,1)*.00075;
+    // History contributes only a dimensionless activity scale. It is not treated as real historical % volatility.
+    const baseSigma=clamp(rawBase*hv.volatilityScale,.0010,stepCap*.28);
+    const shockScale=clamp(
+      baseSigma*(1.45 + hv.burstScale*.58 + clamp(visual?.liquidityBufferFragility||0,0,1)*.34),
+      baseSigma*1.20,
+      stepCap*.72
+    );
+    return {
+      baseSigma,
+      currentSigma:clamp(baseSigma*(.96 + hv.medianRange*.12),baseSigma*.82,stepCap*.42),
+      clustering:clamp(.28 + localVol*.16 + hv.burstRate*.24 + hv.p90Range*.10,.18,.82),
+      shockProbability:clamp(.025 + hv.burstRate*.055 + clamp(visual?.reflexivity||0,0,1)*.032 + clamp(visual?.liquidityBufferFragility||0,0,1)*.036,.02,.12),
+      shockScale,
+      meanReversion:clamp(.09 + hv.reversionScale*.055 + hv.reversalRate*.11 + clamp(visual?.absorption||0,0,1)*.06,.08,.29),
+      bodyMultiplier:clamp(.96 + hv.medianBody*.42 + hv.medianRange*.16 + hv.jumpSigma*.24,.92,1.55),
+      wickMultiplier:clamp(1.02 + hv.p75Range*.34 + hv.burstRate*.38 + hv.jumpSigma*.28,1.0,2.0),
+      recentShock:0,
+      eventCooldown:0
+    };
+  }
+
   function initMarket(profileName, visual, regimes, marketStateBuckets, horizon){
     const base=MARKET_STATE_PROFILES[profileName].map(p=>({...p}));
     const stateBy=Object.fromEntries((marketStateBuckets||[]).map(s=>[s.name,s]));
@@ -1360,7 +1654,10 @@
       maxCascadeIntensity:0,
       memory:createMarketMemory(),
       stepReturnCap:profileName==="microcap" ? .040 : profileName==="midcap" ? .018 : .030,
+      profileName,
       startPrice:1,
+      directionStreak:0,
+      volatilityState:createVolatilityState(profileName, visual, horizon),
       rangeBudget:clamp(
         (profileName==="microcap" ? .30 : profileName==="midcap" ? .14 : .22) *
         Math.sqrt(Math.max(16,horizon||48)/48) *
@@ -1382,8 +1679,8 @@
           const load=clamp((c.load ?? st.positionLoad) + gauss()*.025,.04,.97);
           const pnl=clamp((c.pnl ?? st.pnl) + gauss()*.025,-.70,2.2);
           const sliceCapital=Math.max(.002,p.capital*weight);
-          const inventory=clamp(sliceCapital*load*(1.70 + Math.random()*.18),.001,1);
-          const cash=clamp(sliceCapital*(1-load)*(1.70 + Math.random()*.18),.001,1);
+          const inventory=clamp(sliceCapital*load*(1.70 + rand()*.18),.001,1);
+          const cash=clamp(sliceCapital*(1-load)*(1.70 + rand()*.18),.001,1);
           return {
             id:c.cohortId,
             label:c.cohortLabel || cfg.label,
@@ -1407,7 +1704,7 @@
           ...p,
           cohorts,
           profitReleaseBias:p.name==="earlyProfitPositions" ? clamp(.28 + (st.pnl||0)*.22 + gauss()*.05,0,1) : 0,
-          regimeSensitivity:.78 + Math.random()*.44
+          regimeSensitivity:.78 + rand()*.44
         };
       }),
       visual
@@ -1753,13 +2050,18 @@
     const phase=context.phase || 'реакция';
     const flowIntensity=clamp(Math.abs(context.net||0)/liquidity,0,2);
     const absRet=Math.abs(ret);
-    const balanceBoost=phase==='временный баланс' ? 1.30 : phase==='встречная реакция' ? 1.12 : 1.0;
-    const baseExcursion=clamp((.00055 + absRet*.24 + imbalance*.0017 + stress*.0014 + flowIntensity*.0013)*balanceBoost,.00055,.014);
+    const sigma=Math.max(.0007,context.sigma||0);
+    const eventAbs=Math.abs(context.eventShock||0);
+    const balanceBoost=phase==='временный баланс' ? 1.18 : phase==='встречная реакция' ? 1.08 : phase==='локальное удержание' ? 1.05 : 1.0;
+    const bodyMultiplier=clamp(context.bodyMultiplier||1, .85, 2.0);
+    const wickMultiplier=clamp(context.wickMultiplier||1, .90, 3.0);
+    const baseExcursion=clamp((.00065 + absRet*.20 + sigma*.95 + imbalance*.0015 + stress*.0013 + flowIntensity*.0012 + eventAbs*.40)*balanceBoost*bodyMultiplier,.00065,.022);
     const seed=Math.abs((o*100003+c*37013+(context.net||0)*911));
-    const n1=.58+seededNoise(seed+1.7)*.78;
-    const n2=.58+seededNoise(seed+3.9)*.78;
-    const counterSide=baseExcursion*(.72 + (1-imbalance)*.34)*n1;
-    const continuationSide=baseExcursion*(.58 + imbalance*.42)*n2;
+    const n1=.56+seededNoise(seed+1.7)*.84;
+    const n2=.56+seededNoise(seed+3.9)*.84;
+    const asymmetry=eventAbs>.003 ? (1 + eventAbs*12) : 1;
+    const counterSide=baseExcursion*(.70 + (1-imbalance)*.34 + sigma*16*.08)*n1*wickMultiplier;
+    const continuationSide=baseExcursion*(.56 + imbalance*.42 + eventAbs*22*.10)*n2*asymmetry*wickMultiplier;
     let high=Math.max(o,c), low=Math.min(o,c);
     if(dir>0){
       high=Math.max(high,Math.max(o,c)*Math.exp(continuationSide));
@@ -1909,7 +2211,7 @@
 
         const holdScore=.54 + cfg.patience*.34 + (1-p.aggression)*.20 + (1-v.reflexivity)*.08 + phase.holdBoost + gauss()*.10;
         const [pb,ph]=softmax3(buyScore,holdScore,sellScore);
-        const r=Math.random();
+        const r=rand();
         const side=r<pb ? 1 : (r<pb+ph ? 0 : -1);
 
         c.age=clamp(c.age + .18/Math.max(12,horizon),0,1.35);
@@ -1979,52 +2281,100 @@
     const receivingSideExhaustion=net<0 ? reserveAfter.demandExhaustion : reserveAfter.supplyExhaustion;
     const reserveImpactMultiplier=1 + receivingSideExhaustion*.34 + Math.abs(reserveAfter.balance)*.08;
     const impactMagnitude=.0062 * Math.pow(Math.abs(net)/Math.max(.10,m.liquidityBuffer),.58) * (1 + memory.liquidityFatigue*.18 + memory.absorptionFatigue*.12) * reserveImpactMultiplier;
-    const microNoise=gauss()*(.0015 + .0028*v.crowdStress + .0018*v.liquidityBufferFragility);
     const regimeDirection={accumulation:.18,fomo_chase:.62,distribution:-.50,panic_exit:-.76,absorption:.16,liquidity_vacuum:0,balance:0}[m.regime] || 0;
+
+    const previousPrice=finitePositive(m.price,1);
+    const startPrice=finitePositive(m.startPrice,1);
+    const budget=Math.max(.08,finite(m.rangeBudget,.22));
+    const logFromStart=Math.log(previousPrice/startPrice);
+    const streak=Math.max(0,m.directionStreak||0);
+    const recentSign=Math.sign(recentRet);
+    const volState=m.volatilityState || (m.volatilityState=createVolatilityState(m.profileName||'default', v, horizon));
+    const phaseVolMultiplier=phase.phase==='временный баланс' ? .86 : phase.phase==='встречная реакция' ? 1.05 : phase.phase==='локальное удержание' ? .94 : 1.12;
+    const recentCarry=clamp(Math.abs(recentRet)/Math.max(.001,m.stepReturnCap||.030),0,1)*volState.baseSigma*.72;
+    const sigmaTarget=clamp(
+      volState.baseSigma*(1 + stress*.68 + imbalance*.34 + m.cascadeIntensity*.28 + m.liquidityRetreat*.20 + volState.recentShock*.24)*phaseVolMultiplier + recentCarry,
+      volState.baseSigma*.72,
+      (m.stepReturnCap||.030)*.50
+    );
+    // Convex blend: weights always sum to 1, so volatility does not drift upward by construction.
+    const sigmaPersistence=clamp(.58 + volState.clustering*.26,.60,.82);
+    volState.currentSigma=clamp(
+      volState.currentSigma*sigmaPersistence + sigmaTarget*(1-sigmaPersistence),
+      volState.baseSigma*.74,
+      (m.stepReturnCap||.030)*.52
+    );
+    const sigma=volState.currentSigma;
 
     const cascadeDirection=clamp(m.freshDemandStress - m.lossReactionStress - m.profitReleaseStress*.72,-1,1);
     const baseBehaviorRet=
       Math.sign(net||1)*impactMagnitude +
-      microNoise +
       .0012*v.pressureBias*(.35+.65*m.attention) +
       .0010*regimeDirection*(.4+.6*m.attention) +
       .0007*Math.sign(crowdShock||1)*v.reflexivity*(1-fatigue) +
       .0011*cascadeDirection*m.cascadeIntensity +
       .0008*(memory.buyPersistence-memory.sellPersistence) -
       .0006*memory.failedDemand;
-    const streak=Math.max(0,m.directionStreak||0);
-    const recentSign=Math.sign(recentRet);
-    const localShockScale=.00065 + .00115*clamp(v.vol||0,0,1) + .00085*stress + .00055*clamp(v.reflexivity||0,0,1);
-    const phaseBias=.00215*phase.pulse;
-    const meanRevert=-recentRet*(phase.phase==='временный баланс'?.24:phase.phase==='локальное удержание'?.18:.09)*clamp(1+streak*.07,1,1.65);
-    const counterChance=clamp(.10 + Math.max(0,streak-2)*.055 + (phase.phase==='временный баланс'?.18:0) + (phase.phase==='локальное удержание'?.12:0) + stress*.06,.08,.46);
-    const counterKick=(recentSign && Math.random()<counterChance)
-      ? -recentSign*(.00035 + Math.abs(gauss())*localShockScale*.72)
-      : 0;
-    const localShock=gauss()*localShockScale;
-    const behaviorRet=baseBehaviorRet*phase.returnScale + phaseBias + meanRevert + counterKick + localShock;
 
+    const drift=baseBehaviorRet*phase.returnScale + .00055*phase.pulse;
+    const localShock=gauss()*sigma;
+    const meanRevert=-recentRet*volState.meanReversion*(phase.phase==='временный баланс'?1.42:phase.phase==='локальное удержание'?1.16:1.0)*clamp(1+streak*.06,1,1.55);
+    const counterChance=clamp(.12 + Math.max(0,streak-2)*.05 + (phase.phase==='временный баланс'?.18:0) + (phase.phase==='локальное удержание'?.10:0) + stress*.08 + (volState.meanReversion-.08)*1.2,.10,.56);
+    const counterKick=(recentSign && rand()<counterChance)
+      ? -recentSign*clamp((.34 + Math.abs(gauss())*.72)*sigma*(1+streak*.08), sigma*.22, sigma*1.55)
+      : 0;
+
+    if(volState.eventCooldown>0) volState.eventCooldown--;
+    const rawEventProbability=clamp(
+      volState.shockProbability +
+      stress*.035 +
+      imbalance*.025 +
+      Math.max(0,m.cascadeIntensity-.55)*.075 +
+      Math.max(0,m.liquidityRetreat-.45)*.055 +
+      Math.max(0,receivingSideExhaustion-.45)*.070,
+      .015,.22
+    );
+    const eventProbability=volState.eventCooldown>0 ? 0 : rawEventProbability;
+    let eventShock=0;
+    if(rand()<eventProbability){
+      const directionalBias=Math.sign(net)||Math.sign(drift)||Math.sign(phase.pulse)||1;
+      let shockSign=directionalBias;
+      const budgetUsage=clamp(Math.abs(logFromStart)/Math.max(.0001,budget),0,1.4);
+      const counterEventProb=clamp(.12 + Math.max(0,streak-3)*.04 + Math.max(0,budgetUsage-.58)*.28 + (phase.phase==='временный баланс'?.08:0),.08,.46);
+      if(recentSign && rand()<counterEventProb) shockSign=-recentSign;
+      const eventScale=1 + stress*.44 + imbalance*.38 + m.cascadeIntensity*.30 + volState.recentShock*.16;
+      const shockAbs=clamp((.62 + Math.abs(gauss())*.72)*volState.shockScale*eventScale,sigma*.92,(m.stepReturnCap||.030)*.82);
+      eventShock=shockSign*shockAbs;
+      // Displacements are bursts, not ordinary bars: enforce a short refractory period.
+      volState.eventCooldown=2+Math.floor(rand()*3);
+    }
+
+    const budgetUsage=clamp(Math.abs(logFromStart)/Math.max(.0001,budget),0,1.35);
+    const boundaryPressure=Math.sign(logFromStart||drift)*-1*Math.max(0,budgetUsage-.56)*sigma*(.85 + volState.meanReversion*1.8);
+    const boundaryWhipsaw=(budgetUsage>.62 && rand()<clamp(.10 + (budgetUsage-.62)*.42,.08,.46))
+      ? -Math.sign(logFromStart||recentRet||drift||1)*clamp((.26 + Math.abs(gauss())*.54)*sigma*(1+budgetUsage*.22), sigma*.18, sigma*1.35)
+      : 0;
+    const behaviorRet=drift + localShock + meanRevert + counterKick + eventShock + boundaryPressure + boundaryWhipsaw;
 
     // 5% только для визуальной непрерывности последних свечей; не создаёт сценарий сама по себе.
     const continuityFade=Math.exp(-step/Math.max(3,horizon*.10));
     const continuityRet=.034*v.continuityTrace*continuityFade;
 
     let ret=ENGINE_BEHAVIOR_WEIGHT*behaviorRet + ENGINE_CONTINUITY_WEIGHT*continuityRet;
+    let projected=logFromStart+ret;
+    if(Math.abs(projected)>budget){
+      const overflow=Math.abs(projected)-budget;
+      ret-=Math.sign(projected)*overflow*.78;
+      projected=logFromStart+ret;
+      if(Math.abs(projected)>budget*1.02){
+        ret=Math.sign(projected)*budget*1.02-logFromStart;
+      }
+    }
     ret=clamp(finite(ret,0),-(m.stepReturnCap||.030),(m.stepReturnCap||.030));
 
-    const previousPrice=finitePositive(m.price,1);
-    const startPrice=finitePositive(m.startPrice,1);
-    const budget=Math.max(.08,finite(m.rangeBudget,.22));
-    const logFromStart=Math.log(previousPrice/startPrice);
-    const sameDirection=Math.sign(ret)!==0 && Math.sign(ret)===Math.sign(logFromStart);
-    if(sameDirection){
-      const usage=clamp(Math.abs(logFromStart)/budget,0,1.2);
-      ret*=clamp(1-usage*.72,.18,1);
-    }
-    const projected=logFromStart+ret;
-    if(Math.abs(projected)>budget){
-      ret=Math.sign(projected)*budget-logFromStart;
-    }
+    const realizedAbs=Math.abs(ret);
+    volState.recentShock=clamp(volState.recentShock*.72 + Math.max(0,realizedAbs-sigma)*18 + Math.abs(eventShock)/(Math.max(.001,m.stepReturnCap||.030))*0.18,0,1.8);
+    volState.currentSigma=clamp(volState.currentSigma*.78 + sigmaTarget*.12 + realizedAbs*(eventShock?0.24:0.16), volState.baseSigma*.72, (m.stepReturnCap||.030)*.66);
 
     const retSign=Math.sign(ret);
     if(retSign && retSign===Math.sign(recentRet)) m.directionStreak=Math.min(12,(m.directionStreak||0)+1);
@@ -2034,7 +2384,11 @@
     const nextPrice=previousPrice*Math.exp(ret);
     m.price=finitePositive(nextPrice,previousPrice);
     const causalCandle=buildCausalCandle(previousPrice,m.price,{
-      net,total,imbalance,stress,liquidity:m.liquidityBuffer,phase:phase.phase
+      net,total,imbalance,stress,liquidity:m.liquidityBuffer,phase:phase.phase,
+      sigma:(m.volatilityState?.currentSigma||0),
+      eventShock,
+      bodyMultiplier:(m.volatilityState?.bodyMultiplier||1),
+      wickMultiplier:(m.volatilityState?.wickMultiplier||1)
     });
     m.lastReturn=finite(ret,0);
     m.attention=clamp(
@@ -2061,6 +2415,8 @@
       sellFlow,
       intradayPhase:phase.phase,
       intradayPulse:phase.pulse,
+      volatilitySigma:m.volatilityState?.currentSigma || 0,
+      eventShock,
       reserves:{
         before:reserveBefore,
         after:reserveAfter,
@@ -2071,32 +2427,56 @@
     };
   }
 
-  async function runSimulations(visual, regimes, marketStateBuckets, profile, simulations, horizon){
+  function accumulateFinalCohorts(aggregate,m){
+    for(const c of cohortStateSnapshot(m)){
+      const key=`${c.stateId}:${c.cohortId}`;
+      const a=aggregate[key] ||= {pnl:0,inventoryRatio:0,cashRatio:0,soldFraction:0,n:0,stateLabel:c.stateLabel,cohortLabel:c.cohortLabel};
+      a.pnl+=c.pnl; a.inventoryRatio+=c.inventoryRatio; a.cashRatio+=c.cashRatio; a.soldFraction+=c.soldFraction; a.n++;
+    }
+  }
+
+  function replaySimulation(seed,visual,regimes,marketStateBuckets,profile,horizon){
+    setRunSeed(seed);
+    const m=initMarket(profile,visual,regimes,marketStateBuckets,horizon);
+    const path=[1],candles=[],intradayPhases=[];
+    for(let t=0;t<horizon;t++){
+      const beforeState=systemStateSnapshot(m);
+      const stepResult=stepMarket(m,t,horizon);
+      if(!Number.isFinite(stepResult.price)||stepResult.price<=0){
+        stepResult.price=finitePositive(path[path.length-1],1); stepResult.ret=0; m.price=stepResult.price; m.lastReturn=0;
+      }
+      const afterState=systemStateSnapshot(m);
+      const transition=buildTransitionRecord(beforeState,afterState,stepResult,t);
+      updateMarketMemory(m,beforeState,afterState,stepResult,transition);
+      path.push(stepResult.price);
+      intradayPhases.push(stepResult.intradayPhase||'реакция');
+      if(stepResult.candle && [stepResult.candle.o,stepResult.candle.h,stepResult.candle.l,stepResult.candle.c].every(Number.isFinite)) candles.push(stepResult.candle);
+    }
+    return {path,candles,intradayPhases};
+  }
+
+  async function runSimulations(visual, regimes, marketStateBuckets, profile, simulations, horizon, seedBase=activeRunSeed){
     const paths=[];
     const flowSummary={};
     const cohortFlowSummary={};
     const interactionSummary={};
     const regimeOccupancy={};
     const simMeta=[];
+    const finalCohortAggregate={};
     let invalidStepCount=0;
     const batch=100;
+    const metaStride=Math.max(1,Math.ceil(simulations/2500));
 
     for(let s=0;s<simulations;s++){
+      const simSeed=mixSeed(seedBase,s+1);
+      setRunSeed(simSeed);
       const m=initMarket(profile,visual,regimes,marketStateBuckets,horizon);
       const path=[1];
       const localFlows={};
       const localCohortFlows={};
       const localInteractions={};
       const localRegimes={};
-      const localIntradayPhases=[];
-      const localCandles=[];
-      let cascadeSum=0;
-      let retreatSum=0;
-      let informedSum=0;
-      let panicSum=0;
-      let chaseSum=0;
-      let cascadeMax=0;
-      let keyTransition=null;
+      let cascadeSum=0,retreatSum=0,informedSum=0,panicSum=0,chaseSum=0,cascadeMax=0,keyTransition=null;
       let reserveInitial=null,reserveFinal=null,reserveSupplySum=0,reserveDemandSum=0,reserveBalanceSum=0;
       let reserveSupplyExhaustMax=0,reserveDemandExhaustMax=0,supplyRunwaySum=0,demandRunwaySum=0,supplyRunwayN=0,demandRunwayN=0;
 
@@ -2105,82 +2485,51 @@
         localRegimes[m.regime]=(localRegimes[m.regime]||0)+1;
         const beforeState=systemStateSnapshot(m);
         const stepResult=stepMarket(m,t,horizon);
-        localIntradayPhases.push(stepResult.intradayPhase || 'реакция');
-        if(stepResult.candle && [stepResult.candle.o,stepResult.candle.h,stepResult.candle.l,stepResult.candle.c].every(Number.isFinite)) localCandles.push(stepResult.candle);
-        if(!Number.isFinite(stepResult.price) || stepResult.price<=0){
+        if(!Number.isFinite(stepResult.price)||stepResult.price<=0){
           invalidStepCount++;
           const fallback=finitePositive(path[path.length-1],1);
-          stepResult.price=fallback;
-          stepResult.ret=0;
-          m.price=fallback;
-          m.lastReturn=0;
+          stepResult.price=fallback; stepResult.ret=0; m.price=fallback; m.lastReturn=0;
         }
         const afterState=systemStateSnapshot(m);
         const transition=buildTransitionRecord(beforeState,afterState,stepResult,t);
         updateMarketMemory(m,beforeState,afterState,stepResult,transition);
-        if(!keyTransition || transition.score>keyTransition.score) keyTransition=transition;
+        if(!keyTransition||transition.score>keyTransition.score) keyTransition=transition;
         path.push(stepResult.price);
-        for(const [name,value] of Object.entries(stepResult.groupFlows)){
-          flowSummary[name]=(flowSummary[name]||0)+value;
-          localFlows[name]=(localFlows[name]||0)+value;
-        }
-        for(const [key,value] of Object.entries(stepResult.cohortFlows||{})){
-          cohortFlowSummary[key]=(cohortFlowSummary[key]||0)+value;
-          localCohortFlows[key]=(localCohortFlows[key]||0)+value;
-        }
-        for(const [key,value] of Object.entries(stepResult.interactions||{})){
-          interactionSummary[key]=(interactionSummary[key]||0)+value;
-          localInteractions[key]=(localInteractions[key]||0)+value;
-        }
-        cascadeSum += stepResult.cascadeIntensity||0;
-        retreatSum += stepResult.liquidityRetreat||0;
-        informedSum += stepResult.profitReleaseStress||0;
-        panicSum += stepResult.lossReactionStress||0;
-        chaseSum += stepResult.freshDemandStress||0;
-        cascadeMax = Math.max(cascadeMax, stepResult.cascadeIntensity||0);
+        for(const [name,value] of Object.entries(stepResult.groupFlows)){ flowSummary[name]=(flowSummary[name]||0)+value; localFlows[name]=(localFlows[name]||0)+value; }
+        for(const [key,value] of Object.entries(stepResult.cohortFlows||{})){ cohortFlowSummary[key]=(cohortFlowSummary[key]||0)+value; localCohortFlows[key]=(localCohortFlows[key]||0)+value; }
+        for(const [key,value] of Object.entries(stepResult.interactions||{})){ interactionSummary[key]=(interactionSummary[key]||0)+value; localInteractions[key]=(localInteractions[key]||0)+value; }
+        cascadeSum+=stepResult.cascadeIntensity||0; retreatSum+=stepResult.liquidityRetreat||0; informedSum+=stepResult.profitReleaseStress||0;
+        panicSum+=stepResult.lossReactionStress||0; chaseSum+=stepResult.freshDemandStress||0; cascadeMax=Math.max(cascadeMax,stepResult.cascadeIntensity||0);
         if(stepResult.reserves){
-          reserveInitial ||= stepResult.reserves.before;
-          reserveFinal = stepResult.reserves.after;
-          reserveSupplySum += stepResult.reserves.after.supplyShare||0;
-          reserveDemandSum += stepResult.reserves.after.demandShare||0;
-          reserveBalanceSum += stepResult.reserves.after.balance||0;
-          reserveSupplyExhaustMax=Math.max(reserveSupplyExhaustMax,stepResult.reserves.after.supplyExhaustion||0);
-          reserveDemandExhaustMax=Math.max(reserveDemandExhaustMax,stepResult.reserves.after.demandExhaustion||0);
+          reserveInitial ||= stepResult.reserves.before; reserveFinal=stepResult.reserves.after;
+          reserveSupplySum+=stepResult.reserves.after.supplyShare||0; reserveDemandSum+=stepResult.reserves.after.demandShare||0; reserveBalanceSum+=stepResult.reserves.after.balance||0;
+          reserveSupplyExhaustMax=Math.max(reserveSupplyExhaustMax,stepResult.reserves.after.supplyExhaustion||0); reserveDemandExhaustMax=Math.max(reserveDemandExhaustMax,stepResult.reserves.after.demandExhaustion||0);
           if(Number.isFinite(stepResult.reserves.supplyRunway)){ supplyRunwaySum+=stepResult.reserves.supplyRunway; supplyRunwayN++; }
           if(Number.isFinite(stepResult.reserves.demandRunway)){ demandRunwaySum+=stepResult.reserves.demandRunway; demandRunwayN++; }
         }
       }
 
       paths.push(path);
-      simMeta.push({
+      accumulateFinalCohorts(finalCohortAggregate,m);
+      // Keep only summaries for all simulations. Full candles/phases are replayed only for selected medoids.
+      const keepFullMeta=(s%metaStride===0);
+      simMeta.push(keepFullMeta ? {
+        seed:simSeed,
         flows:localFlows,
         cohortFlows:localCohortFlows,
         interactions:localInteractions,
         regimes:localRegimes,
-        intradayPhases:localIntradayPhases,
-        candles:localCandles,
-        intradaySequence:{...(m.intradaySequence||{})},
-        cascadeAvg:cascadeSum/Math.max(1,horizon),
-        cascadeMax,
-        liquidityRetreatAvg:retreatSum/Math.max(1,horizon),
-        informedSellAvg:informedSum/Math.max(1,horizon),
-        lossReactionStressAvg:panicSum/Math.max(1,horizon),
-        chaseAvg:chaseSum/Math.max(1,horizon),
-        keyTransition,
+        cascadeAvg:cascadeSum/Math.max(1,horizon),cascadeMax,
+        liquidityRetreatAvg:retreatSum/Math.max(1,horizon),informedSellAvg:informedSum/Math.max(1,horizon),
+        lossReactionStressAvg:panicSum/Math.max(1,horizon),chaseAvg:chaseSum/Math.max(1,horizon),keyTransition,
         reserve:{
-          initial:reserveInitial,
-          final:reserveFinal,
-          supplyShareAvg:reserveSupplySum/Math.max(1,horizon),
-          demandShareAvg:reserveDemandSum/Math.max(1,horizon),
-          balanceAvg:reserveBalanceSum/Math.max(1,horizon),
-          supplyExhaustionMax:reserveSupplyExhaustMax,
-          demandExhaustionMax:reserveDemandExhaustMax,
-          supplyRunwayAvg:supplyRunwayN?supplyRunwaySum/supplyRunwayN:null,
-          demandRunwayAvg:demandRunwayN?demandRunwaySum/demandRunwayN:null
+          initial:reserveInitial,final:reserveFinal,
+          supplyShareAvg:reserveSupplySum/Math.max(1,horizon),demandShareAvg:reserveDemandSum/Math.max(1,horizon),balanceAvg:reserveBalanceSum/Math.max(1,horizon),
+          supplyExhaustionMax:reserveSupplyExhaustMax,demandExhaustionMax:reserveDemandExhaustMax,
+          supplyRunwayAvg:supplyRunwayN?supplyRunwaySum/supplyRunwayN:null,demandRunwayAvg:demandRunwayN?demandRunwaySum/demandRunwayN:null
         },
-        memory:marketMemorySnapshot(m.memory),
-        finalCohorts:cohortStateSnapshot(m)
-      });
+        memory:marketMemorySnapshot(m.memory)
+      } : {seed:simSeed});
 
       if((s+1)%batch===0 && s+1<simulations){
         const simProgress=(s+1)/simulations;
@@ -2190,7 +2539,7 @@
       }
     }
 
-    return {paths,flowSummary,cohortFlowSummary,interactionSummary,regimeOccupancy,simMeta,invalidStepCount};
+    return {paths,flowSummary,cohortFlowSummary,interactionSummary,regimeOccupancy,simMeta,finalCohortAggregate,invalidStepCount,seedBase,metaStride};
   }
 
   function summarizePressureReserves(ids,simMeta){
@@ -2233,64 +2582,134 @@
     const clean=(path||[]).map((v,i)=>finitePositive(v,i?finitePositive(path[i-1],1):1));
     const start=finitePositive(clean[0],1), end=finitePositive(clean[clean.length-1],start), max=Math.max(...clean), min=Math.min(...clean);
     const rets=clean.slice(1).map((v,i)=>Math.log(finitePositive(v,clean[i])/finitePositive(clean[i],1))).filter(Number.isFinite);
+    const absRets=rets.map(v=>Math.abs(v));
     const signature=resample(clean.map(v=>Math.log(v/start)),10);
     const maxIndex=clean.indexOf(max)/Math.max(1,clean.length-1);
     const minIndex=clean.indexOf(min)/Math.max(1,clean.length-1);
-    let turns=0;
-    for(let i=2;i<clean.length;i++){
-      const a=Math.sign(clean[i-1]-clean[i-2]), b=Math.sign(clean[i]-clean[i-1]);
-      if(a && b && a!==b) turns++;
+    let turns=0, prevSign=0, currentStreak=0;
+    const streaks=[];
+    for(let i=0;i<rets.length;i++){
+      const sign=Math.sign(rets[i]);
+      if(sign){
+        if(prevSign && sign!==prevSign) turns++;
+        if(sign===prevSign) currentStreak+=1;
+        else {
+          if(currentStreak) streaks.push(currentStreak);
+          currentStreak=1;
+          prevSign=sign;
+        }
+      }
     }
+    if(currentStreak) streaks.push(currentStreak);
+    const burstRate=absRets.length ? absRets.filter(v=>v>=Math.max(quantile(absRets,.84),mean(absRets)+std(absRets)*.45)).length/absRets.length : 0;
+    const avgStreak=mean(streaks)||1;
     return [
-      Math.log(end/start)*1.25,
+      Math.log(end/start)*1.18,
       Math.log(max/start),
       Math.log(min/start),
-      std(rets)*5,
-      maxIndex*.28,
-      minIndex*.28,
-      clamp(turns/Math.max(1,clean.length-2),0,1)*.35,
-      ...signature.map(v=>v*.72)
+      std(rets)*4.6,
+      quantile(absRets,.90)*4.0,
+      (Math.max(...absRets,0))*3.4,
+      clamp(burstRate,0,1)*.42,
+      maxIndex*.24,
+      minIndex*.24,
+      clamp(turns/Math.max(1,rets.length-1),0,1)*.30,
+      clamp(avgStreak/Math.max(1,clean.length*.16),0,1)*.24,
+      ...signature.map(v=>v*.70)
     ].map(v=>finite(v,0));
   }
   function distance(a,b){ let s=0; for(let i=0;i<a.length;i++){ const d=a[i]-b[i]; s+=d*d; } return Math.sqrt(s); }
+  function representativeMedoid(indices, centroid, feats, paths){
+    if(!indices.length) return 0;
+    const stats=indices.map(i=>({i,...pathVolatilityStats(paths[i])}));
+    const targetVol=quantile(stats.map(s=>s.realizedVol),.50);
+    const targetP90=quantile(stats.map(s=>s.p90Abs),.50);
+    const targetBurst=quantile(stats.map(s=>s.burstRate),.50);
+    const targetFlip=quantile(stats.map(s=>s.signFlipRate),.50);
+    const targetStreak=quantile(stats.map(s=>s.avgStreak),.50);
+    let best=indices[0], bestScore=Infinity;
+    for(const s of stats){
+      const dFeat=distance(feats[s.i],centroid);
+      const volPenalty=
+        Math.abs(s.realizedVol-targetVol)/Math.max(.0006,targetVol||.0006) +
+        Math.abs(s.p90Abs-targetP90)/Math.max(.0008,targetP90||.0008) +
+        Math.abs(s.burstRate-targetBurst)*1.8 +
+        Math.abs(s.signFlipRate-targetFlip)*1.1 +
+        Math.abs(s.avgStreak-targetStreak)/Math.max(1,targetStreak||1);
+      const score=dFeat + volPenalty*.22;
+      if(score<bestScore){ bestScore=score; best=s.i; }
+    }
+    return best;
+  }
   function clusterTwo(paths){
-    // Последний барьер: один испорченный числовой шаг не должен ломать все сценарии.
     paths=(paths||[]).map(path=>{
       let prev=1;
       return (path||[]).map(v=>{ prev=finitePositive(v,prev); return prev; });
     });
-    if(!paths.length) paths=[[1,1],[1,1]];
-    if(paths.length===1) paths=[paths[0], [...paths[0]]];
+    if(!paths.length) paths=[[1,1]];
     const feats=paths.map(pathFeatures);
+    const allIds=paths.map((_,i)=>i);
+    const centroidOf=indices=>Array.from({length:feats[0].length},(_,j)=>mean(indices.map(i=>feats[i][j])));
+    const allCentroid=centroidOf(allIds);
+
+    if(paths.length<4){
+      const medoid=representativeMedoid(allIds,allCentroid,feats,paths);
+      const primary={ids:allIds,centroid:allCentroid,medoid,path:paths[medoid],prob:1,isDistinct:true};
+      const secondary={ids:[],centroid:allCentroid,medoid,path:paths[medoid],prob:0,isDistinct:false};
+      return [primary,secondary];
+    }
+
     const terminal=feats.map((f,i)=>({i,v:f[0]})).sort((a,b)=>a.v-b.v);
-    let c0=[...feats[terminal[Math.floor(terminal.length*.2)].i]], c1=[...feats[terminal[Math.floor(terminal.length*.8)].i]], labels=new Array(paths.length).fill(0);
+    let c0=[...feats[terminal[Math.floor(terminal.length*.2)].i]],c1=[...feats[terminal[Math.floor(terminal.length*.8)].i]],labels=new Array(paths.length).fill(0);
     for(let iter=0;iter<12;iter++){
       const groups=[[],[]];
-      for(let i=0;i<feats.length;i++){ const d0=distance(feats[i],c0), d1=distance(feats[i],c1); labels[i]=d0<=d1?0:1; groups[labels[i]].push(feats[i]); }
-      [c0,c1]=[0,1].map(k=>groups[k].length ? Array.from({length:feats[0].length},(_,j)=>mean(groups[k].map(f=>f[j]))) : (k===0?c0:c1));
+      for(let i=0;i<feats.length;i++){
+        const d0=distance(feats[i],c0),d1=distance(feats[i],c1);
+        labels[i]=d0<=d1?0:1; groups[labels[i]].push(i);
+      }
+      if(!groups[0].length||!groups[1].length) break;
+      c0=centroidOf(groups[0]); c1=centroidOf(groups[1]);
     }
-    let ids=[[],[]]; labels.forEach((l,i)=>ids[l].push(i));
-    if(!ids[0].length || !ids[1].length){
-      ids=[[],[]]; const order=feats.map((f,i)=>({i,v:f[0]})).sort((a,b)=>a.v-b.v); const cut=Math.max(1,Math.floor(order.length/2));
-      order.forEach((d,rank)=>ids[rank<cut?0:1].push(d.i));
-      const centroidOf=indices=>Array.from({length:feats[0].length},(_,j)=>mean(indices.map(i=>feats[i][j])));
-      c0=centroidOf(ids[0]); c1=centroidOf(ids[1]);
+
+    const ids=[[],[]]; labels.forEach((l,i)=>ids[l].push(i));
+    if(!ids[0].length||!ids[1].length){
+      const medoid=representativeMedoid(allIds,allCentroid,feats,paths);
+      return [
+        {ids:allIds,centroid:allCentroid,medoid,path:paths[medoid],prob:1,isDistinct:true},
+        {ids:[],centroid:allCentroid,medoid,path:paths[medoid],prob:0,isDistinct:false}
+      ];
     }
-    function medoid(indices, centroid){ let best=indices[0], bestD=Infinity; for(const i of indices){ const d=distance(feats[i],centroid); if(d<bestD){ bestD=d; best=i; } } return best; }
+
+    c0=centroidOf(ids[0]); c1=centroidOf(ids[1]);
+    const between=distance(c0,c1);
+    const within0=mean(ids[0].map(i=>distance(feats[i],c0)));
+    const within1=mean(ids[1].map(i=>distance(feats[i],c1)));
+    const within=(within0*ids[0].length+within1*ids[1].length)/Math.max(1,paths.length);
+    const separation=between/Math.max(.0001,within);
+    const endReturns=paths.map(p=>Math.log(finitePositive(p[p.length-1],1)/finitePositive(p[0],1)));
+    const endStd=std(endReturns);
+    const end0=quantile(ids[0].map(i=>endReturns[i]),.50),end1=quantile(ids[1].map(i=>endReturns[i]),.50);
+    const terminalGap=Math.abs(end0-end1);
+    const minShare=Math.min(ids[0].length,ids[1].length)/Math.max(1,paths.length);
+    const distinct=(separation>=1.10 && between>=.028 && minShare>=.08) || (separation>=.95 && terminalGap>=Math.max(.008,endStd*.58) && minShare>=.10);
+
+    if(!distinct){
+      const medoid=representativeMedoid(allIds,allCentroid,feats,paths);
+      return [
+        {ids:allIds,centroid:allCentroid,medoid,path:paths[medoid],prob:1,isDistinct:true,separation,terminalGap},
+        {ids:[],centroid:allCentroid,medoid,path:paths[medoid],prob:0,isDistinct:false,separation,terminalGap}
+      ];
+    }
+
+    const medoid0=representativeMedoid(ids[0],c0,feats,paths),medoid1=representativeMedoid(ids[1],c1,feats,paths);
     const clusters=[
-      {ids:ids[0], centroid:c0, medoid:medoid(ids[0],c0), path:paths[medoid(ids[0],c0)]},
-      {ids:ids[1], centroid:c1, medoid:medoid(ids[1],c1), path:paths[medoid(ids[1],c1)]}
+      {ids:ids[0],centroid:c0,medoid:medoid0,path:paths[medoid0],prob:ids[0].length/paths.length,isDistinct:true,separation,terminalGap},
+      {ids:ids[1],centroid:c1,medoid:medoid1,path:paths[medoid1],prob:ids[1].length/paths.length,isDistinct:true,separation,terminalGap}
     ].sort((a,b)=>b.ids.length-a.ids.length);
-    for(const c of clusters){
-      const members=c.ids.map(i=>paths[i]);
-      c.low=Array.from({length:paths[0].length},(_,t)=>quantile(members.map(p=>p[t]),.10));
-      c.high=Array.from({length:paths[0].length},(_,t)=>quantile(members.map(p=>p[t]),.90));
-      c.prob=c.ids.length/paths.length;
-    }
     return clusters;
   }
 
-  function summarizeClusterDriver(cluster, simMeta, cohortStates){
+  function summarizeClusterDriver(cluster, simMeta){
     const flows={};
     const cohortFlows={};
     const regimes={};
@@ -2396,43 +2815,32 @@
     return `${summary.text}. ${summary.driver}.`;
   }
 
-  function formatDynamicCohortRead(simMeta){
+  function formatDynamicCohortRead(simMeta,finalCohortAggregate){
     const flows={};
-    const finals={};
-    let finalCount=0;
     for(const meta of simMeta||[]){
       for(const [key,v] of Object.entries(meta.cohortFlows||{})) flows[key]=(flows[key]||0)+v;
-      for(const c of meta.finalCohorts||[]){
-        const key=`${c.stateId}:${c.cohortId}`;
-        const acc=finals[key] ||= {pnl:0,inventoryRatio:0,cashRatio:0,soldFraction:0,n:0,stateLabel:c.stateLabel,cohortLabel:c.cohortLabel};
-        acc.pnl+=c.pnl; acc.inventoryRatio+=c.inventoryRatio; acc.cashRatio+=c.cashRatio; acc.soldFraction+=c.soldFraction; acc.n++;
-        finalCount++;
-      }
     }
+    const finals=finalCohortAggregate||{};
     const ordered=Object.entries(flows).sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]));
     const seller=ordered.filter(([,v])=>v<0)[0];
     const buyer=ordered.filter(([,v])=>v>0)[0];
 
     const avgFinal=Object.entries(finals).map(([key,a])=>({
-      key,
-      stateLabel:a.stateLabel,
-      cohortLabel:a.cohortLabel,
-      pnl:a.pnl/Math.max(1,a.n),
-      inventoryRatio:a.inventoryRatio/Math.max(1,a.n),
-      cashRatio:a.cashRatio/Math.max(1,a.n),
-      soldFraction:a.soldFraction/Math.max(1,a.n)
+      key,stateLabel:a.stateLabel,cohortLabel:a.cohortLabel,
+      pnl:a.pnl/Math.max(1,a.n),inventoryRatio:a.inventoryRatio/Math.max(1,a.n),cashRatio:a.cashRatio/Math.max(1,a.n),soldFraction:a.soldFraction/Math.max(1,a.n)
     }));
-    const trapped=avgFinal.sort((a,b)=>(b.inventoryRatio*Math.max(0,-b.pnl))-(a.inventoryRatio*Math.max(0,-a.pnl)))[0];
+    const trapped=[...avgFinal].sort((a,b)=>(b.inventoryRatio*Math.max(0,-b.pnl))-(a.inventoryRatio*Math.max(0,-a.pnl)))[0];
 
     const fmtKey=key=>{
-      const [p,c]=key.split(':');
-      return `${MARKET_STATE_LABELS[p]||p} · ${COHORT_BEHAVIOR[c]?.label||c}`;
+      if(!key) return '—';
+      const [stateId,cohortId]=key.split(':');
+      return `${MARKET_STATE_LABELS[stateId]||stateId} / ${COHORT_BEHAVIOR[cohortId]?.label||cohortId}`;
     };
     const parts=[];
-    if(seller) parts.push(`главную разгрузку чаще создают ${fmtKey(seller[0])}`);
-    if(buyer) parts.push(`спрос чаще поддерживают ${fmtKey(buyer[0])}`);
-    if(trapped && trapped.pnl<-.025) parts.push(`сильнее всего зажаты в убытке ${trapped.stateLabel} · ${trapped.cohortLabel} (${formatSignedPct(trapped.pnl)})`);
-    return parts.length ? parts.join('; ')+'.' : 'выраженного лидера среди когорт нет.';
+    if(seller) parts.push(`главная разгрузка: ${fmtKey(seller[0])}`);
+    if(buyer) parts.push(`главная поддержка: ${fmtKey(buyer[0])}`);
+    if(trapped && trapped.pnl<-.02) parts.push(`наибольший остаточный стресс: ${trapped.stateLabel} / ${trapped.cohortLabel}`);
+    return parts.length?`${parts.join('; ')}.`:'динамика когорт близка к балансу.';
   }
 
   function seededNoise(seed){
@@ -2835,9 +3243,8 @@
     for(let i=0;i<=5;i++){
       const y=topPad+((plotBottom-topPad)/5)*i;
       const normalized=invY(y);
-      const label=currentPrice
-        ? formatPrice(currentPrice*normalized)
-        : `${((normalized-1)*100)>=0?'+':''}${((normalized-1)*100).toFixed(1)}%`;
+      const modelPct=(normalized-1)*100;
+      const label=`${modelPct>=0?'+':''}${modelPct.toFixed(1)}%`;
       ctx.strokeStyle=COLORS.marker; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(right+4,y); ctx.lineTo(right+10,y); ctx.stroke();
       ctx.fillStyle=COLORS.text; ctx.textAlign='left'; ctx.fillText(label,right+14,y);
     }
@@ -2860,7 +3267,7 @@
       ctx.fillStyle=COLORS.text; ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillText(text,bx+padX,y+boxH/2+0.5);
     }
 
-    pill(`ИСТОРИЯ · ${lastResult.displayBase.tfLabel} · реконструкция`,left,10,'left');
+    pill('ИСТОРИЯ · 15m · реконструкция',left,10,'left');
     pill('ПРОГНОЗ · 15m · выбранная модель',right-6,10,'right');
     pill(`АКТИВНАЯ МОДЕЛЬ: ${selectedModel===0?'A':'B'} · ${(active.prob*100).toFixed(1)}%`,right-6,36,'right');
   }
@@ -2876,7 +3283,10 @@
   }
 
   function setSelectedModel(index){
-    selectedModel=index===1 ? 1 : 0;
+    const secondAvailable=!!(lastResult?.clusters?.[1]?.isDistinct && lastResult.clusters[1].prob>0);
+    selectedModel=(index===1 && secondAvailable) ? 1 : 0;
+    if(els.showModelB) els.showModelB.disabled=!secondAvailable;
+    if(els.focusB) els.focusB.disabled=!secondAvailable;
     els.showModelA.classList.toggle("active",selectedModel===0); els.showModelA.classList.toggle("a",selectedModel===0);
     els.showModelB.classList.toggle("active",selectedModel===1); els.showModelB.classList.toggle("b",selectedModel===1);
     els.focusA.classList.toggle("active",selectedModel===0); els.focusA.classList.toggle("a",selectedModel===0);
@@ -2898,19 +3308,32 @@
       updateMetrics(recog.visual, recog.confidence);
       els.status.textContent="симуляция";
       await new Promise(r=>requestAnimationFrame(r));
-      const simulations=Number(els.simulations.value), horizon=Number(els.horizon.value), profile=els.marketProfile.value;
+      const simulations=clamp(Number(els.simulations.value),500,6000), horizon=Number(els.horizon.value), profile=els.marketProfile.value;
+      const runSeed=buildAnalysisSeed(recog,profile,simulations,horizon);
+      setRunSeed(runSeed);
       const baseParticipantStates=buildMarketStateBuckets(profile,recog.visual,recog.regimes);
       const cohortStates=buildStateCohorts(baseParticipantStates, recog.regimes, recog.visual);
       const marketStateBuckets=mergeStateCohorts(baseParticipantStates, cohortStates);
       renderMarketStateMap(marketStateBuckets);
       setAnalysisProgress(20,'Моделирование рынка',`0 из ${simulations.toLocaleString('ru-RU')} симуляций`);
-      const simResult=await runSimulations(recog.visual, recog.regimes, marketStateBuckets, profile, simulations, horizon);
+      const simResult=await runSimulations(recog.visual, recog.regimes, marketStateBuckets, profile, simulations, horizon, runSeed);
       const paths=simResult.paths;
-      setAnalysisProgress(91,'Сбор сценариев','Группируем симуляции в два наиболее характерных будущих состояния');
+      setAnalysisProgress(91,'Сбор сценариев','Проверяем, образуют ли симуляции один устойчивый сценарий или два действительно разных кластера');
       const clusters=clusterTwo(paths);
+      // Recreate full OHLC/phases only for representatives. This keeps 10k simulations memory-safe.
+      const replayed=new Set();
+      for(const cluster of clusters){
+        if(!cluster || replayed.has(cluster.medoid)) continue;
+        const meta=simResult.simMeta?.[cluster.medoid];
+        if(!meta?.seed) continue;
+        const replay=replaySimulation(meta.seed,recog.visual,recog.regimes,marketStateBuckets,profile,horizon);
+        meta.candles=replay.candles; meta.intradayPhases=replay.intradayPhases;
+        cluster.path=replay.path; paths[cluster.medoid]=replay.path;
+        replayed.add(cluster.medoid);
+      }
       setAnalysisProgress(96,'Построение результата','Собираем объяснение, память рынка и свечное продолжение');
-      const driverA=summarizeClusterDriver(clusters[0],simResult.simMeta,cohortStates);
-      const driverB=summarizeClusterDriver(clusters[1],simResult.simMeta,cohortStates);
+      const driverA=summarizeClusterDriver(clusters[0],simResult.simMeta);
+      const driverB=summarizeClusterDriver(clusters[1],simResult.simMeta);
       const cascadeA=summarizeInteractionChain(clusters[0],simResult.simMeta);
       const cascadeB=summarizeInteractionChain(clusters[1],simResult.simMeta);
       const transitionAll=summarizeTransitions(simResult.simMeta.map((_,i)=>i),simResult.simMeta);
@@ -2922,14 +3345,17 @@
       const reserveAll=summarizePressureReserves(simResult.simMeta.map((_,i)=>i),simResult.simMeta);
       const reserveA=summarizePressureReserves(clusters[0].ids,simResult.simMeta);
       const reserveB=summarizePressureReserves(clusters[1].ids,simResult.simMeta);
-      const dataConfidence=clamp((recog.confidence*0.44)+(recog.candleScore*0.14),0,.59);
-      lastResult={...recog, ...simResult, marketStateBuckets, cohortStates, paths, clusters, drivers:[driverA,driverB], cascades:[cascadeA,cascadeB], transitions:[transitionA,transitionB], transitionAll, memorySummaries:[memoryA,memoryB], memoryAll, reserveSummaries:[reserveA,reserveB], reserveAll, confidence:dataConfidence, anchorPrice:getCurrentPrice()};
+      const tfCount=new Set(recog.extracted.map(e=>e.tf)).size;
+      const contextBonus=clamp((tfCount-1)*.025,0,.075);
+      const dataConfidence=clamp(recog.confidence*.70+recog.candleScore*.25+contextBonus,0,.94);
+      lastResult={...recog,...simResult,marketStateBuckets,cohortStates,paths,clusters,drivers:[driverA,driverB],cascades:[cascadeA,cascadeB],transitions:[transitionA,transitionB],transitionAll,memorySummaries:[memoryA,memoryB],memoryAll,reserveSummaries:[reserveA,reserveB],reserveAll,confidence:dataConfidence,runSeed};
       els.probA.textContent=(clusters[0].prob*100).toFixed(1)+"%";
-      els.probB.textContent=(clusters[1].prob*100).toFixed(1)+"%";
+      els.probB.textContent=clusters[1].isDistinct ? (clusters[1].prob*100).toFixed(1)+"%" : "—";
       els.descA.textContent=describeScenario(clusters[0].path);
-      els.descB.textContent=describeScenario(clusters[1].path);
+      els.descB.textContent=clusters[1].isDistinct ? describeScenario(clusters[1].path) : 'Отдельный второй сценарий не сформирован: симуляции образуют один устойчивый кластер.';
       renderScenarioMap(els.scenarioMapA,clusters[0].path,simResult.simMeta?.[clusters[0].medoid]);
-      renderScenarioMap(els.scenarioMapB,clusters[1].path,simResult.simMeta?.[clusters[1].medoid]);
+      if(clusters[1].isDistinct) renderScenarioMap(els.scenarioMapB,clusters[1].path,simResult.simMeta?.[clusters[1].medoid]);
+      else if(els.scenarioMapB) els.scenarioMapB.innerHTML='';
       if(els.driverA) els.driverA.textContent=`Основной механизм: ${driverA.text}`;
       if(els.driverB) els.driverB.textContent=`Основной механизм: ${driverB.text}`;
       if(els.cascadeA) els.cascadeA.textContent=`Реакция рынка: ${cascadeA.text}`;
@@ -2942,13 +3368,20 @@
       renderPressureReserves(reserveAll);
       if(els.reserveA) els.reserveA.textContent=`Запасы давления: ${reserveA.text}. ${reserveA.detail}`;
       if(els.reserveB) els.reserveB.textContent=`Запасы давления: ${reserveB.text}. ${reserveB.detail}`;
+      if(!clusters[1].isDistinct){
+        if(els.driverB) els.driverB.textContent='Основной механизм: отдельный второй кластер не подтверждён';
+        if(els.cascadeB) els.cascadeB.textContent='Реакция рынка: —';
+        if(els.transitionB) els.transitionB.textContent='Переход состояния: —';
+        if(els.memoryB) els.memoryB.textContent='Память сценария: —';
+        if(els.reserveB) els.reserveB.textContent='Запасы давления: —';
+      }
       renderTransitionStrip(els.transitionGlobal,transitionAll);
       if(els.regimeRead) els.regimeRead.innerHTML=`<b>Режим реакции:</b> ${formatRegimeRead(recog.regimes)}`;
       if(els.marketStateRead) els.marketStateRead.innerHTML=`<b>Состояние капитала:</b> ${formatMarketStateRead(simResult.flowSummary)}`;
-      if(els.cohortRead) els.cohortRead.innerHTML=`<b>Динамика состояний:</b> ${formatDynamicCohortRead(simResult.simMeta)}`;
+      if(els.cohortRead) els.cohortRead.innerHTML=`<b>Динамика состояний:</b> ${formatDynamicCohortRead(simResult.simMeta,simResult.finalCohortAggregate)}`;
       if(els.interactionRead) els.interactionRead.innerHTML=`<b>Реакция рынка:</b> ${formatOverallInteractionRead(simResult.simMeta)}`;
       els.confidence.textContent=`уверенность ${(dataConfidence*100).toFixed(0)}%`;
-      els.status.textContent=`готово · ${simulations.toLocaleString('ru-RU')} симуляций`;
+      els.status.textContent=`готово · ${simulations.toLocaleString('ru-RU')} симуляций · seed ${runSeed.toString(16).padStart(8,'0')}`;
       setSelectedModel(0); draw();
       setAnalysisProgress(100,'Анализ завершён',simResult.invalidStepCount ? `Восстановлено некорректных шагов: ${simResult.invalidStepCount}` : 'Результат готов');
       await new Promise(r=>setTimeout(r,180));
@@ -2971,7 +3404,7 @@
     const incoming=[...list].filter(f=>f.type.startsWith('image/'));
     for(const file of incoming){
       if(files.length>=6) break;
-      files.push({ id: crypto.randomUUID?.() || Math.random().toString(36).slice(2), file, tf: inferTimeframe(file.name) });
+      files.push({ id: crypto.randomUUID?.() || rand().toString(36).slice(2), file, tf: inferTimeframe(file.name) });
     }
     renderThumbs();
   }

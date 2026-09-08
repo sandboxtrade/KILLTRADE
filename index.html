@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#090b0f" />
-  <title>Индикатор Лжи — Engine v1.14</title>
+  <title>Индикатор Лжи — Engine v1.16</title>
   <style>
     :root{
       --bg:#090b0f;
@@ -206,7 +206,7 @@
       color:#090b0f;
       font-weight:800;
     }
-    .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+    .btn:disabled,.seg-btn:disabled,.mini-btn:disabled{opacity:.42;cursor:not-allowed;transform:none}
 
     .note{
       margin:14px 0 0;
@@ -499,9 +499,9 @@
     <div class="topbar">
       <div class="brand">
         <h1>ИНДИКАТОР ЛЖИ</h1>
-        <p>v1.14: история полностью реконструируется из распознанных OHLC и рисуется тем же candle renderer, что и прогноз. Убрана вставка исходного скриншота, объединены X/Y-шкалы и переработана микроструктура прогнозных свечей.</p>
+        <p>v1.16: исправлены таймфреймы и непрерывность OHLC, все загруженные ТФ участвуют в модели, M5 корректно агрегируется в 15m, добавлены воспроизводимый seed, адаптивное число сценариев и более стабильная модель волатильности. История и ось явно помечены как модельная реконструкция.</p>
       </div>
-      <div class="badge">ENGINE v1.14</div>
+      <div class="badge">ENGINE v1.16</div>
     </div>
 
     <section class="grid">
@@ -522,7 +522,7 @@
           <div class="controls">
             <div class="field">
               <label><span>Число симуляций</span><b id="simValue">3000</b></label>
-              <input id="simulations" type="range" min="500" max="10000" step="500" value="3000">
+              <input id="simulations" type="range" min="500" max="6000" step="500" value="3000">
               <div id="simExplain" class="slider-hint">3 000 — хороший баланс между скоростью и стабильностью результата.</div>
             </div>
 
@@ -533,9 +533,9 @@
             </div>
 
             <div class="field">
-              <label><span>Текущая цена</span><b id="priceModeLabel">относительная шкала</b></label>
+              <label><span>Текущая цена</span><b id="priceModeLabel">модельная шкала</b></label>
               <input id="currentPrice" type="number" inputmode="decimal" min="0" step="any" placeholder="Например: 66.65">
-              <div class="slider-hint">Если цена не указана, справа показывается изменение в % от последней свечи.</div>
+              <div class="slider-hint">Цена используется только как якорь текущей точки и для расчёта прогнозных уровней. Ось графика остаётся модельной: история из скриншота не содержит надёжной реальной ценовой шкалы.</div>
             </div>
 
             <div class="field">
