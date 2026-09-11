@@ -396,62 +396,148 @@
     return { w,h,data:cctx.getImageData(0,0,w,h).data };
   }
 
+  function makeColorClassifier(dataObj,bg){
+    const {w,data}=dataObj;
+    return (x,y)=>{
+      if(x<0 || y<0 || x>=dataObj.w || y>=dataObj.h) return 0;
+      const i=(Math.floor(y)*w+Math.floor(x))*4;
+      const r=data[i],g=data[i+1],b=data[i+2];
+      const lum=(r+g+b)/3;
+      const dr=r-bg[0], dg=g-bg[1];
+      // Exchange themes differ, so use channel dominance plus distance from the local background.
+      const green=g>r+15 && g>b+6 && dg>20 && lum>34;
+      const red=r>g+15 && r>b+6 && dr>20 && lum>34;
+      return green?1:(red?-1:0);
+    };
+  }
+
+  function detectChartColorBounds(dataObj,bg){
+    const {w,h}=dataObj;
+    const classify=makeColorClassifier(dataObj,bg);
+    const factor=4;
+    const cw=Math.ceil(w/factor), ch=Math.ceil(h/factor);
+    const active=new Uint8Array(cw*ch);
+    const broadX0=Math.max(0,Math.floor(w*.008)), broadX1=Math.min(w-1,Math.ceil(w*.985));
+    const broadY0=Math.max(0,Math.floor(h*.055)), broadY1=Math.min(h-1,Math.ceil(h*.90));
+
+    for(let y=broadY0;y<=broadY1;y++){
+      const gy=Math.floor(y/factor);
+      for(let x=broadX0;x<=broadX1;x++){
+        if(classify(x,y)) active[gy*cw+Math.floor(x/factor)]=1;
+      }
+    }
+
+    // Connect neighbouring candle bodies/wicks, but not distant UI blocks.
+    const dilated=new Uint8Array(active.length);
+    for(let gy=0;gy<ch;gy++){
+      for(let gx=0;gx<cw;gx++){
+        if(!active[gy*cw+gx]) continue;
+        for(let dy=-1;dy<=1;dy++){
+          const yy=gy+dy; if(yy<0||yy>=ch) continue;
+          for(let dx=-2;dx<=2;dx++){
+            const xx=gx+dx; if(xx<0||xx>=cw) continue;
+            dilated[yy*cw+xx]=1;
+          }
+        }
+      }
+    }
+
+    const visited=new Uint8Array(dilated.length);
+    const stack=new Int32Array(dilated.length);
+    const components=[];
+    for(let idx=0;idx<dilated.length;idx++){
+      if(!dilated[idx] || visited[idx]) continue;
+      let sp=0; stack[sp++]=idx; visited[idx]=1;
+      let minX=cw,maxX=0,minY=ch,maxY=0,count=0;
+      while(sp){
+        const cur=stack[--sp], y=Math.floor(cur/cw), x=cur-y*cw;
+        minX=Math.min(minX,x); maxX=Math.max(maxX,x); minY=Math.min(minY,y); maxY=Math.max(maxY,y); count++;
+        for(let dy=-1;dy<=1;dy++){
+          const yy=y+dy; if(yy<0||yy>=ch) continue;
+          for(let dx=-1;dx<=1;dx++){
+            if(!dx&&!dy) continue;
+            const xx=x+dx; if(xx<0||xx>=cw) continue;
+            const ni=yy*cw+xx;
+            if(dilated[ni]&&!visited[ni]){ visited[ni]=1; stack[sp++]=ni; }
+          }
+        }
+      }
+      const bw=(maxX-minX+1)*factor, bh=(maxY-minY+1)*factor;
+      const px=minX*factor, py=minY*factor;
+      const wf=bw/w, hf=bh/h, cy=(py+bh*.5)/h;
+      if(wf<.20 || hf<.10 || cy>.90) continue;
+      const centerBonus=1-clamp(Math.abs(cy-.56)/.56,0,1);
+      let score=wf*2.55 + hf*2.05 + centerBonus*.42 + Math.min(1,count/Math.max(1,cw*ch*.035))*.82;
+      if(wf<.34) score-=.55;
+      if(hf<.15) score-=.75;
+      if(py>h*.80) score-=1.1;
+      components.push({x:px,y:py,w:bw,h:bh,count,score});
+    }
+    if(!components.length) return null;
+    components.sort((a,b)=>b.score-a.score);
+    const best=components[0];
+    const padX=Math.max(5,Math.round(w*.012)), padY=Math.max(8,Math.round(h*.018));
+    return {
+      x0:clamp(best.x-padX,0,w-24),
+      x1:clamp(best.x+best.w+padX,24,w-1),
+      y0:clamp(best.y-padY,0,h-40),
+      y1:clamp(best.y+best.h+padY,40,h-1),
+      componentScore:best.score
+    };
+  }
+
   function estimateBounds(dataObj){
     const {w,h,data}=dataObj;
-    const broad={x0:Math.round(w*.025),x1:Math.round(w*.955),y0:Math.round(h*.045),y1:Math.round(h*.92)};
-
+    const broad={x0:Math.round(w*.01),x1:Math.round(w*.985),y0:Math.round(h*.045),y1:Math.round(h*.92)};
     const rs=[],gs=[],bs=[];
     for(let y=broad.y0;y<broad.y1;y+=Math.max(4,Math.floor(h/90))){
       for(let x=broad.x0;x<broad.x1;x+=Math.max(4,Math.floor(w/130))){
         const i=(y*w+x)*4; rs.push(data[i]); gs.push(data[i+1]); bs.push(data[i+2]);
       }
     }
-    const med = arr => { const a=[...arr].sort((a,b)=>a-b); return a[Math.floor(a.length/2)]||0; };
+    const med=arr=>{ const a=[...arr].sort((a,b)=>a-b); return a[Math.floor(a.length/2)]||0; };
     const bg=[med(rs),med(gs),med(bs)];
     const contrastAt=(x,y)=>{
-      const i=(y*w+x)*4;
+      const i=(Math.floor(y)*w+Math.floor(x))*4;
       const dr=data[i]-bg[0], dg=data[i+1]-bg[1], db=data[i+2]-bg[2];
       const chroma=Math.max(data[i],data[i+1],data[i+2])-Math.min(data[i],data[i+1],data[i+2]);
-      const lum=Math.sqrt(dr*dr+dg*dg+db*db);
-      return lum + chroma*.35;
+      return Math.sqrt(dr*dr+dg*dg+db*db)+chroma*.35;
     };
-    const colorLike=(x,y)=>{
-      const i=(y*w+x)*4, r=data[i],g=data[i+1],b=data[i+2];
-      const lum=(r+g+b)/3;
-      const green=g>r+15 && g>b+6 && (g-bg[1])>22 && lum>38;
-      const red=r>g+15 && r>b+6 && (r-bg[0])>22 && lum>38;
-      return green||red;
-    };
+    const classify=makeColorClassifier(dataObj,bg);
+    const component=detectChartColorBounds(dataObj,bg);
 
-    // First use candle-like colour pixels to estimate the chart rectangle. This removes the old hard 7–88% / 10–78% crop.
-    const colorXs=[],colorYs=[];
-    for(let y=broad.y0;y<broad.y1;y+=2){
-      for(let x=broad.x0;x<broad.x1;x+=2){
-        if(colorLike(x,y)){ colorXs.push(x); colorYs.push(y); }
+    let x0,x1,y0,y1,boundsSource;
+    if(component){
+      ({x0,x1,y0,y1}=component); boundsSource='candle-component';
+    } else {
+      // Conservative fallback: use coloured pixels but keep the search in the chart-like middle of the screen.
+      const xs=[],ys=[];
+      const fy0=Math.floor(h*.10), fy1=Math.floor(h*.86);
+      for(let y=fy0;y<fy1;y+=2){
+        for(let x=broad.x0;x<broad.x1;x+=2){
+          if(classify(x,y)){ xs.push(x); ys.push(y); }
+        }
       }
-    }
-    let x0=broad.x0,x1=broad.x1,y0=broad.y0,y1=broad.y1;
-    if(colorXs.length>=40){
-      x0=clamp(Math.floor(quantile(colorXs,.01)-w*.018),broad.x0,broad.x1-20);
-      x1=clamp(Math.ceil(quantile(colorXs,.99)+w*.018),x0+20,broad.x1);
-      // Ignore the extreme bottom tail: on many exchanges that is the volume panel.
-      const q02=quantile(colorYs,.02), q92=quantile(colorYs,.92);
-      y0=clamp(Math.floor(q02-h*.035),broad.y0,broad.y1-30);
-      y1=clamp(Math.ceil(q92+h*.045),y0+30,broad.y1);
+      if(xs.length>=30){
+        x0=clamp(Math.floor(quantile(xs,.015)-w*.015),0,w-24);
+        x1=clamp(Math.ceil(quantile(xs,.985)+w*.015),x0+24,w-1);
+        y0=clamp(Math.floor(quantile(ys,.02)-h*.025),0,h-40);
+        y1=clamp(Math.ceil(quantile(ys,.96)+h*.025),y0+40,h-1);
+      } else {
+        x0=Math.floor(w*.035); x1=Math.floor(w*.93); y0=Math.floor(h*.18); y1=Math.floor(h*.80);
+      }
+      boundsSource='fallback';
     }
 
+    // Do not allow a thin control/text strip to masquerade as a chart.
+    if(y1-y0<h*.16){ y0=Math.max(0,Math.floor(h*.18)); y1=Math.min(h-1,Math.floor(h*.82)); boundsSource+='-expanded'; }
     const colActivity=[];
-    for(let x=x0;x<x1;x+=2){
+    for(let x=Math.floor(x0);x<=Math.floor(x1);x+=2){
       let active=0;
-      for(let y=y0;y<y1;y+=3) if(contrastAt(x,y)>36) active++;
+      for(let y=Math.floor(y0);y<y1;y+=3) if(classify(x,y)) active++;
       colActivity.push({x,active});
     }
-    const actVals=colActivity.map(d=>d.active);
-    const threshold=Math.max(2, quantile(actVals,.62));
-    const activeCols=colActivity.filter(d=>d.active>=threshold).map(d=>d.x);
-    const ax0=activeCols.length ? Math.max(x0, quantile(activeCols,.015)) : x0;
-    const ax1=activeCols.length ? Math.min(x1, quantile(activeCols,.985)) : x1;
-    return {w,h,data,bg,contrastAt,x0:ax0,x1:ax1,y0,y1,colActivity,boundsSource:colorXs.length>=40?'color':'contrast'};
+    return {w,h,data,bg,contrastAt,classify,x0,x1,y0,y1,colActivity,boundsSource};
   }
 
   function extractPath(bounds){
@@ -512,95 +598,127 @@
     return out;
   }
 
-  function extractColoredCandles(bounds){
-    const {w,data,bg,x0,x1,y0,y1}=bounds;
-    const classify=(x,y)=>{
-      const i=(y*w+x)*4;
-      const r=data[i], g=data[i+1], b=data[i+2];
-      const lum=(r+g+b)/3;
-      const dr=r-bg[0], dg=g-bg[1], db=b-bg[2];
-      const green = g > r + 18 && g > b + 8 && dg > 26 && lum > 42;
-      const red = r > g + 18 && r > b + 8 && dr > 26 && lum > 42;
-      return green ? 1 : (red ? -1 : 0);
-    };
-
-    const counts=[];
-    for(let x=Math.floor(x0); x<=Math.floor(x1); x++){
-      let count=0;
-      for(let y=y0; y<y1; y++) if(classify(x,y)!==0) count++;
-      counts.push(count);
+  function estimateCandleSpacing(bounds){
+    const {x0,x1,y0,y1,classify}=bounds;
+    const width=Math.max(1,Math.floor(x1-x0+1));
+    const counts=new Float64Array(width);
+    for(let ix=0;ix<width;ix++){
+      const x=Math.floor(x0)+ix;
+      let n=0;
+      for(let y=Math.floor(y0);y<=Math.floor(y1);y++) if(classify(x,y)) n++;
+      counts[ix]=n;
     }
-    const nonZero=counts.filter(v=>v>0);
-    if(nonZero.length<18) return {candles:[], confidence:0};
-
-    const baseTh=Math.max(2, Math.floor(quantile(nonZero,.32)*0.45));
-    const raw=[];
-    let run=null;
-    for(let i=0;i<counts.length;i++){
-      if(counts[i] >= baseTh){ if(!run) run={start:i,end:i}; else run.end=i; }
-      else if(run){ raw.push(run); run=null; }
-    }
-    if(run) raw.push(run);
-
-    const maxMergedWidth=Math.max(42,Math.min(160,Math.round((x1-x0)*.28)));
-    let segments=raw.filter(s => (s.end-s.start+1)>=1 && (s.end-s.start+1)<=maxMergedWidth);
-    const narrowWidths=segments.map(s=>s.end-s.start+1).filter(w=>w<=16);
-    const typicalWidth=Math.max(2, narrowWidths.length ? quantile(narrowWidths,.50) : 5);
-    const splitSegments=[];
-    for(const s of segments){
-      const width=s.end-s.start+1;
-      if(width <= typicalWidth*2.80){ splitSegments.push(s); continue; }
-      const n=clamp(Math.round(width/Math.max(2,typicalWidth+1)),2,12);
-      for(let k=0;k<n;k++){
-        const a=Math.round(s.start + k*width/n);
-        const b=Math.round(s.start + (k+1)*width/n)-1;
-        if(b>=a) splitSegments.push({start:a,end:b});
+    const meanCount=mean([...counts]);
+    let variance=0;
+    for(const v of counts) variance+=(v-meanCount)*(v-meanCount);
+    variance/=Math.max(1,counts.length);
+    const maxLag=Math.max(5,Math.min(24,Math.floor(width/10)));
+    const candidates=[];
+    if(variance>1e-8){
+      for(let lag=4;lag<=maxLag;lag++){
+        let s=0,n=0;
+        for(let i=0;i<width-lag;i++){ s+=(counts[i]-meanCount)*(counts[i+lag]-meanCount); n++; }
+        candidates.push({lag,score:n?s/n/variance:0});
       }
     }
-    segments=splitSegments;
+    let step=clamp(Math.round(width/95),4,12);
+    if(candidates.length){
+      const maxScore=Math.max(...candidates.map(c=>c.score));
+      const good=candidates.filter(c=>c.score>=Math.max(.10,maxScore*.84));
+      if(good.length) step=Math.min(...good.map(c=>c.lag));
+      else step=candidates.sort((a,b)=>b.score-a.score)[0].lag;
+    }
+    step=clamp(Math.round(step),4,18);
+
+    let bestOffset=0,bestScore=-Infinity;
+    for(let off=0;off<step;off++){
+      let score=0,n=0;
+      for(let pos=off;pos<width;pos+=step){
+        let local=counts[pos]||0;
+        if(pos>0) local=Math.max(local,counts[pos-1]||0);
+        if(pos+1<width) local=Math.max(local,counts[pos+1]||0);
+        score+=local; n++;
+      }
+      score/=Math.max(1,n);
+      if(score>bestScore){bestScore=score;bestOffset=off;}
+    }
+    return {step,offset:bestOffset,counts};
+  }
+
+  function extractColorCenterPath(bounds, spacing){
+    const {x0,x1,y0,y1,classify}=bounds;
+    const bucket=Math.max(3,spacing?.step||Math.round((x1-x0)/90));
+    const ys=[];
+    for(let bx=Math.floor(x0);bx<=Math.floor(x1);bx+=bucket){
+      const local=[];
+      for(let x=bx;x<Math.min(x1+1,bx+bucket);x++){
+        for(let y=Math.floor(y0);y<=Math.floor(y1);y++) if(classify(x,y)) local.push(y);
+      }
+      if(local.length>=4) ys.push(quantile(local,.50));
+    }
+    if(ys.length<8) return [];
+    const raw=ys.map(y=>-(y-y0)/Math.max(1,y1-y0));
+    return normalizePath(smooth(raw,1));
+  }
+
+  function extractColoredCandles(bounds){
+    const {x0,x1,y0,y1,classify}=bounds;
+    const spacing=estimateCandleSpacing(bounds);
+    const step=spacing.step, offset=spacing.offset;
     const candles=[];
-    for(const s of segments){
-      const startX=Math.floor(x0+s.start), endX=Math.floor(x0+s.end);
-      const width=Math.max(1,endX-startX+1);
-      const points=[];
-      let signScore=0;
-      for(let x=startX; x<=endX; x++){
-        for(let y=y0; y<y1; y++){
+    const half=Math.max(1,Math.floor(step*.44));
+    const roiH=Math.max(1,y1-y0);
+
+    for(let cx=Math.floor(x0)+offset;cx<=Math.floor(x1);cx+=step){
+      const xa=Math.max(Math.floor(x0),cx-half), xb=Math.min(Math.floor(x1),cx+half);
+      const width=Math.max(1,xb-xa+1);
+      const greenPts=[],redPts=[];
+      const greenRows=new Map(),redRows=new Map();
+      for(let x=xa;x<=xb;x++){
+        for(let y=Math.floor(y0);y<=Math.floor(y1);y++){
           const side=classify(x,y);
-          if(!side) continue;
-          points.push({x,y,side});
-          signScore += side;
+          if(side>0){ greenPts.push(y); greenRows.set(y,(greenRows.get(y)||0)+1); }
+          else if(side<0){ redPts.push(y); redRows.set(y,(redRows.get(y)||0)+1); }
         }
       }
-      if(points.length<6) continue;
-      const dominant=signScore>=0 ? 1 : -1;
-      const own=points.filter(p=>p.side===dominant);
+      const own=greenPts.length>=redPts.length?greenPts:redPts;
+      const rows=greenPts.length>=redPts.length?greenRows:redRows;
+      const dominant=greenPts.length>=redPts.length?1:-1;
       if(own.length<5) continue;
-      const ys=own.map(p=>p.y);
-      const rowCounts={};
-      for(const pt of own) rowCounts[pt.y]=(rowCounts[pt.y]||0)+1;
-      let bodyRows=Object.entries(rowCounts).filter(([,count])=>count>=Math.max(2,Math.ceil(width*0.55))).map(([y])=>Number(y));
-      if(bodyRows.length<2) bodyRows=Object.entries(rowCounts).filter(([,count])=>count>=Math.max(2,Math.ceil(width*0.35))).map(([y])=>Number(y));
-      if(bodyRows.length<1) continue;
-      const highY=Math.min(...ys), lowY=Math.max(...ys), topBody=Math.min(...bodyRows), bottomBody=Math.max(...bodyRows);
-      const high=-(highY-y0)/(y1-y0);
-      const low=-(lowY-y0)/(y1-y0);
+
+      let bodyRows=[...rows.entries()].filter(([,count])=>count>=Math.max(2,Math.ceil(width*.34))).map(([y])=>y);
+      if(!bodyRows.length) bodyRows=[...rows.entries()].filter(([,count])=>count>=2).map(([y])=>y);
+      if(!bodyRows.length) continue;
+
+      const highY=Math.min(...own), lowY=Math.max(...own), topBody=Math.min(...bodyRows), bottomBody=Math.max(...bodyRows);
+      const high=-(highY-y0)/roiH, low=-(lowY-y0)/roiH;
       const isUp=dominant>0;
-      const open=-( (isUp ? bottomBody : topBody) - y0)/(y1-y0);
-      const close=-( (isUp ? topBody : bottomBody) - y0)/(y1-y0);
+      const open=-((isUp?bottomBody:topBody)-y0)/roiH;
+      const close=-((isUp?topBody:bottomBody)-y0)/roiH;
+      const bodyPx=Math.abs(bottomBody-topBody)+1;
+      const wickPx=Math.abs(lowY-highY)+1;
+      if(wickPx<2 || bodyPx<1) continue;
       candles.push({
         o:open,
         h:Math.max(high,open,close),
         l:Math.min(low,open,close),
-        c:close
+        c:close,
+        _x:cx,
+        _rawDirection:dominant,
+        _quality:clamp(own.length/Math.max(5,width*Math.max(3,wickPx)),0,1)
       });
     }
 
-    if(candles.length<10) return {candles:[], confidence:0};
-    const widths=segments.map(s=>s.end-s.start+1);
-    const regularity=1-clamp(std(widths)/Math.max(1,mean(widths))*0.45,0,1);
-    const confidence=clamp(0.56 + Math.min(candles.length,52)/88 + regularity*0.18,0,1);
-    return {candles, confidence};
+    if(candles.length<10) return {candles:[],confidence:0,visualPath:[],spacing};
+    // Trim sparse false positives before/after the real candle chain.
+    const diffs=candles.slice(1).map((c,i)=>c._x-candles[i]._x).filter(Number.isFinite);
+    const spacingReg=diffs.length?clamp(1-std(diffs)/Math.max(1,mean(diffs))*.8,0,1):.4;
+    const expected=Math.max(1,Math.round((candles[candles.length-1]._x-candles[0]._x)/step)+1);
+    const coverage=clamp(candles.length/expected,0,1);
+    const quality=mean(candles.map(c=>c._quality||0));
+    const confidence=clamp(.38 + Math.min(candles.length,80)/130 + spacingReg*.20 + coverage*.12 + quality*.10,0,.97);
+    const visualPath=extractColorCenterPath(bounds,spacing);
+    return {candles,confidence,visualPath,spacing,spacingReg,coverage};
   }
 
   function extractCandles(bounds){
@@ -679,6 +797,24 @@
     return { candles, confidence };
   }
 
+  function directionAgreementScore(a,b){
+    if(!a?.length || !b?.length) return .5;
+    const aa=resample(normalizePath(a),32), bb=resample(normalizePath(b),32);
+    const da=aa[aa.length-1]-aa[0], db=bb[bb.length-1]-bb[0];
+    if(Math.abs(da)<.08 || Math.abs(db)<.08) return .65;
+    return Math.sign(da)===Math.sign(db)?1:0;
+  }
+
+  function evaluateRecognitionCandidate(cand,referencePath){
+    const historyCandles=cand?.candles?.length?normalizeCandles(cand.candles):[];
+    const candlePath=historyCandles.length?normalizePath(historyCandles.map(c=>c.c)):[];
+    const agreement=pathAgreementScore(candlePath,referencePath);
+    const dirAgreement=directionAgreementScore(candlePath,referencePath);
+    const countQuality=clamp(historyCandles.length/34,0,1);
+    const score=clamp((cand?.confidence||0)*.48 + agreement*.28 + dirAgreement*.14 + countQuality*.10,0,1);
+    return {historyCandles,candlePath,agreement,dirAgreement,countQuality,score};
+  }
+
   async function analyzeImage(item){
     const img=await fileToImage(item.file);
     const dataObj=getImageData(img);
@@ -686,17 +822,32 @@
     const line=extractPath(bounds);
     const rawCand=extractCandles(bounds);
     const colorCand=extractColoredCandles(bounds);
-    const cand=(colorCand.candles.length && colorCand.confidence >= rawCand.confidence*0.80) ? colorCand : rawCand;
-    const tf = item.tf === 'auto' ? inferTimeframe(item.file.name) : item.tf;
+    const colorRef=colorCand.visualPath?.length?colorCand.visualPath:line.path;
+    const colorEval=evaluateRecognitionCandidate(colorCand,colorRef);
+    const rawEval=evaluateRecognitionCandidate(rawCand,line.path);
+
+    let useColor=colorCand.candles.length>=10 && (colorCand.confidence>=rawCand.confidence*.64 || bounds.boundsSource==='candle-component');
+    // If colour reconstruction and the independent path disagree badly, automatically try the
+    // contrast segmentation instead of confidently rendering a contradictory history.
+    if(useColor && (colorEval.agreement<.30 || colorEval.dirAgreement===0) && rawEval.score>colorEval.score+.07) useColor=false;
+    if(!useColor && colorEval.score>rawEval.score+.10 && colorCand.candles.length>=10) useColor=true;
+
+    const cand=useColor?colorCand:rawCand;
+    const evaluated=useColor?colorEval:rawEval;
+    const tf=item.tf==='auto'?inferTimeframe(item.file.name):item.tf;
     const rawContinuity=rawContinuityScore(cand.candles);
-    const historyCandles = cand.candles.length ? normalizeCandles(cand.candles) : [];
-    const candlePath=historyCandles.length ? normalizePath(historyCandles.map(c=>c.c)) : [];
-    const path = candlePath.length ? candlePath : line.path;
-    const agreement=pathAgreementScore(candlePath,line.path);
-    const countQuality=clamp(historyCandles.length/28,0,1);
-    const candleConfidence=clamp(cand.confidence*.70 + rawContinuity*.15 + agreement*.10 + countQuality*.05,0,.94);
-    let confidence=clamp(line.confidence*.34 + candleConfidence*.46 + agreement*.12 + rawContinuity*.08,0,.94);
-    if(historyCandles.length<10) confidence=Math.min(confidence,.72);
+    const historyCandles=evaluated.historyCandles;
+    const candlePath=evaluated.candlePath;
+    const visualReference=useColor?colorRef:line.path;
+    const path=candlePath.length?candlePath:visualReference;
+    const agreement=evaluated.agreement;
+    const dirAgreement=evaluated.dirAgreement;
+    const countQuality=evaluated.countQuality;
+    const spacingQuality=useColor?clamp((colorCand.spacingReg||0)*.65+(colorCand.coverage||0)*.35,0,1):.45;
+    const candleConfidence=clamp(cand.confidence*.60 + agreement*.16 + dirAgreement*.10 + countQuality*.08 + spacingQuality*.06,0,.96);
+    let confidence=clamp(candleConfidence*.62 + agreement*.16 + dirAgreement*.10 + line.confidence*.06 + rawContinuity*.06,0,.96);
+    if(historyCandles.length<12) confidence=Math.min(confidence,.68);
+    if(agreement<.34 || dirAgreement===0) confidence=Math.min(confidence,.56);
     return {
       name:item.file.name,
       tf,
@@ -706,10 +857,14 @@
       candleConfidence,
       rawContinuity,
       pathAgreement:agreement,
+      directionAgreement:dirAgreement,
       confidence,
       candles:historyCandles,
       sourceWidth:dataObj.w,
-      sourceHeight:dataObj.h
+      sourceHeight:dataObj.h,
+      boundsSource:bounds.boundsSource,
+      candleStep:colorCand.spacing?.step||null,
+      recognitionMethod:useColor?'regular-color':'contrast-fallback'
     };
   }
 
@@ -719,17 +874,14 @@
     const out=[];
     let prevClose=null;
     for(const raw of clean){
-      if(prevClose===null){
-        const o=raw.o,c=raw.c;
-        out.push({o,h:Math.max(raw.h,o,c),l:Math.min(raw.l,o,c),c});
-        prevClose=c;
-        continue;
-      }
-      // Screenshots of continuous crypto markets should not contain gaps between adjacent 15m/5m candles.
-      // Preserve the detected body/wicks, but translate the whole candle so open == previous close.
-      const delta=prevClose-raw.o;
-      const o=prevClose,c=raw.c+delta,h=raw.h+delta,l=raw.l+delta;
-      out.push({o,h:Math.max(h,o,c),l:Math.min(l,o,c),c});
+      // Preserve the absolute pixel-derived close/high/low. Only the next open is constrained
+      // to the previous close. Translating the whole candle would accumulate body sizes and
+      // invent trends that were never present in the screenshot.
+      const c=raw.c;
+      const o=prevClose===null?raw.o:prevClose;
+      const h=Math.max(raw.h,o,c);
+      const l=Math.min(raw.l,o,c);
+      out.push({o,h,l,c});
       prevClose=c;
     }
     return out;
@@ -831,61 +983,105 @@
     return {medianRange,p75Range,p90Range,medianBody,jumpSigma,burstRate,reversalRate,avgStreak,volatilityScale,burstScale,reversionScale};
   }
 
+  function extractAdaptivePivots(series){
+    const clean=(series||[]).map(Number).filter(Number.isFinite);
+    if(clean.length<3) return clean.map((value,index)=>({index,value}));
+    const range=Math.max(1e-9,Math.max(...clean)-Math.min(...clean));
+    const deltas=clean.slice(1).map((v,i)=>v-clean[i]);
+    const absD=deltas.map(Math.abs);
+    const threshold=Math.max(range*.028,quantile(absD,.55)*1.20,quantile(absD,.78)*.72,1e-9);
+    const pivots=[{index:0,value:clean[0]}];
+    let direction=0;
+    let extremeIndex=0,extremeValue=clean[0];
+
+    for(let i=1;i<clean.length;i++){
+      const v=clean[i];
+      if(direction===0){
+        if(v>extremeValue){extremeValue=v;extremeIndex=i;}
+        else if(v<extremeValue){extremeValue=v;extremeIndex=i;}
+        const fromStart=v-clean[0];
+        if(Math.abs(fromStart)>=threshold){
+          direction=Math.sign(fromStart);
+          extremeIndex=i; extremeValue=v;
+        }
+        continue;
+      }
+      if(direction>0){
+        if(v>=extremeValue){ extremeValue=v; extremeIndex=i; }
+        else if(extremeValue-v>=threshold){
+          const last=pivots[pivots.length-1];
+          if(extremeIndex!==last.index) pivots.push({index:extremeIndex,value:extremeValue});
+          direction=-1; extremeIndex=i; extremeValue=v;
+        }
+      } else {
+        if(v<=extremeValue){ extremeValue=v; extremeIndex=i; }
+        else if(v-extremeValue>=threshold){
+          const last=pivots[pivots.length-1];
+          if(extremeIndex!==last.index) pivots.push({index:extremeIndex,value:extremeValue});
+          direction=1; extremeIndex=i; extremeValue=v;
+        }
+      }
+    }
+    const lastIndex=clean.length-1;
+    const last=pivots[pivots.length-1];
+    if(extremeIndex!==last.index && Math.abs(extremeValue-last.value)>=threshold*.55) pivots.push({index:extremeIndex,value:extremeValue});
+    if(pivots[pivots.length-1].index!==lastIndex) pivots.push({index:lastIndex,value:clean[lastIndex]});
+    return pivots;
+  }
+
   function structureStatsFromSeries(series){
     const clean=(series||[]).filter(Number.isFinite);
     if(clean.length<3){
-      return {directionalEfficiency:.62,roughness:.38,swingCount:2,avgSwingLength:3,medianSwingAmplitude:.18,medianRetracement:.30,maxRetracement:.45,turnRate:.28};
+      return {directionalEfficiency:.58,roughness:.42,swingCount:2,avgSwingLength:3,medianSwingAmplitude:.18,medianRetracement:.30,maxRetracement:.45,turnRate:.22,medianPrimaryLength:3,medianCounterLength:3};
     }
-    const deltas=clean.slice(1).map((v,i)=>v-clean[i]);
-    const absD=deltas.map(Math.abs);
-    const totalTravel=Math.max(1e-9,absD.reduce((a,b)=>a+b,0));
+    const pivots=extractAdaptivePivots(clean);
     const range=Math.max(1e-9,Math.max(...clean)-Math.min(...clean));
-    const noiseFloor=Math.max(quantile(absD,.28)*.34,range*.0065,1e-9);
     const segments=[];
-    let current=null;
-    for(let i=0;i<deltas.length;i++){
-      const d=deltas[i];
-      let sign=Math.abs(d)>=noiseFloor ? Math.sign(d) : 0;
-      if(!sign){
-        if(current){ current.move+=d; current.length+=1; current.end=i+1; }
-        continue;
-      }
-      if(!current || current.dir!==sign){
-        if(current) segments.push(current);
-        current={dir:sign,move:d,length:1,start:i,end:i+1};
-      } else {
-        current.move+=d; current.length+=1; current.end=i+1;
-      }
+    for(let i=1;i<pivots.length;i++){
+      const a=pivots[i-1],b=pivots[i];
+      const move=b.value-a.value;
+      if(Math.abs(move)<range*.004) continue;
+      segments.push({dir:Math.sign(move)||1,move,length:Math.max(1,b.index-a.index),start:a.index,end:b.index});
     }
-    if(current) segments.push(current);
+    if(!segments.length){
+      const net=clean[clean.length-1]-clean[0];
+      segments.push({dir:Math.sign(net)||1,move:net,length:clean.length-1,start:0,end:clean.length-1});
+    }
     const net=clean[clean.length-1]-clean[0];
-    const globalDir=Math.sign(net)||1;
+    const globalDir=Math.sign(net)||segments[0].dir||1;
+    const totalTravel=Math.max(1e-9,segments.reduce((s,x)=>s+Math.abs(x.move),0));
+    const primary=segments.filter(s=>s.dir===globalDir);
+    const counter=segments.filter(s=>s.dir!==globalDir);
     const amplitudes=segments.map(s=>Math.abs(s.move)/range);
+    const primaryAmps=primary.map(s=>Math.abs(s.move)/range);
+    const counterAmps=counter.map(s=>Math.abs(s.move)/range);
     const retr=[];
     let lastPrimaryMove=null;
     for(const s of segments){
-      if(s.dir===globalDir){
-        lastPrimaryMove=Math.max(Math.abs(s.move),noiseFloor);
-      } else if(lastPrimaryMove){
-        retr.push(Math.abs(s.move)/lastPrimaryMove);
-      }
+      if(s.dir===globalDir) lastPrimaryMove=Math.max(Math.abs(s.move),range*.004);
+      else if(lastPrimaryMove) retr.push(Math.abs(s.move)/lastPrimaryMove);
     }
     const directionalEfficiency=clamp(Math.abs(net)/totalTravel,0,1);
     const swingCount=Math.max(1,segments.length);
     const avgSwingLength=mean(segments.map(s=>s.length))||2;
     const medianSwingAmplitude=quantile(amplitudes,.50)||.12;
-    const medianRetracement=clamp(retr.length?quantile(retr,.50):.28,.05,1.35);
+    const medianRetracement=clamp(retr.length?quantile(retr,.50):(counterAmps.length&&primaryAmps.length?quantile(counterAmps,.50)/Math.max(.02,quantile(primaryAmps,.50)):.30),.05,1.35);
     const maxRetracement=clamp(retr.length?Math.max(...retr):.45,.08,1.8);
-    const turnRate=clamp((swingCount-1)/Math.max(1,deltas.length-1),0,1);
+    const turnRate=clamp((swingCount-1)/Math.max(1,clean.length-2),0,1);
     return {
       directionalEfficiency,
       roughness:clamp(1-directionalEfficiency,0,1),
       swingCount,
-      avgSwingLength:clamp(avgSwingLength,1,12),
+      avgSwingLength:clamp(avgSwingLength,1,16),
       medianSwingAmplitude:clamp(medianSwingAmplitude,.02,1.2),
       medianRetracement,
       maxRetracement,
-      turnRate
+      turnRate,
+      medianPrimaryLength:clamp(primary.length?quantile(primary.map(s=>s.length),.50):avgSwingLength,1,16),
+      medianCounterLength:clamp(counter.length?quantile(counter.map(s=>s.length),.50):avgSwingLength*.75,1,14),
+      medianPrimaryAmplitude:clamp(primaryAmps.length?quantile(primaryAmps,.50):medianSwingAmplitude,.02,1.2),
+      medianCounterAmplitude:clamp(counterAmps.length?quantile(counterAmps,.50):medianSwingAmplitude*.45,.01,1.0),
+      pivotCount:pivots.length
     };
   }
 
@@ -894,10 +1090,11 @@
     const stats=structureStatsFromSeries(closes);
     return {
       ...stats,
-      targetEfficiency:clamp(stats.directionalEfficiency,.24,.78),
-      targetSwingLength:clamp(stats.avgSwingLength,2,7),
-      targetRetracement:clamp(stats.medianRetracement,.16,.82),
-      waveStrength:clamp(.72 + stats.roughness*.70 + stats.turnRate*.45,.72,1.62)
+      targetEfficiency:clamp(stats.directionalEfficiency,.20,.74),
+      targetSwingLength:clamp(stats.medianPrimaryLength||stats.avgSwingLength,2,9),
+      targetCounterLength:clamp(stats.medianCounterLength||stats.avgSwingLength*.75,2,8),
+      targetRetracement:clamp(stats.medianRetracement,.16,.88),
+      waveStrength:clamp(.78 + stats.roughness*.82 + stats.turnRate*.55 + Math.min(.35,(stats.swingCount/Math.max(4,closes.length))*.6),.78,1.78)
     };
   }
 
@@ -1429,13 +1626,14 @@
       throw new Error('Для построения 15m-прогноза нужен хотя бы один скриншот M15 или M5. H1/H4/D1 используются только как контекст.');
     }
 
-    let displayCandles=(displayBase.candles||[]).slice(-60);
+    const historyTarget=56;
+    let displayCandles=(displayBase.candles||[]).slice(-(displayBase.tf==='m5'?historyTarget*3:historyTarget));
     if(!displayCandles.length){
-      const displayPath=resample(displayBase.path,displayBase.tf==='m5'?90:48);
-      displayCandles=pathToCandles(displayPath.map(v=>1+v*.3),displayBase.tf==='m5'?72:44,.72).map(c=>({o:c.o-1,h:c.h-1,l:c.l-1,c:c.c-1}));
+      const displayPath=resample(displayBase.path,displayBase.tf==='m5'?historyTarget*3:historyTarget);
+      displayCandles=pathToCandles(displayPath.map(v=>1+v*.3),displayBase.tf==='m5'?historyTarget*3:historyTarget,.72).map(c=>({o:c.o-1,h:c.h-1,l:c.l-1,c:c.c-1}));
     }
     if(displayBase.tf==='m5') displayCandles=aggregateCandles(displayCandles,3);
-    displayCandles=reconstructContinuousCandles(displayCandles).slice(-40);
+    displayCandles=reconstructContinuousCandles(displayCandles).slice(-historyTarget);
     visual.historyVolatility=deriveHistoryVolatility(displayCandles);
     visual.historyStructure=deriveHistoryPathStructure(displayCandles);
 
@@ -1623,35 +1821,41 @@
 
   function swingDuration(m, mode){
     const hs=m.visual?.historyStructure || deriveHistoryPathStructure([]);
-    let base=hs.targetSwingLength||3;
-    if(mode==='absorption') base=2.1;
-    else if(mode==='balance') base=Math.max(2,base*.62);
-    else if(mode==='counterflow') base=Math.max(2,base*.82);
-    else if(mode==='release') base=Math.max(2,base*.92);
-    const jitter=.72+rand()*.62;
-    return clamp(Math.round(base*jitter),2,mode==='impulse'?8:7);
+    let base=hs.targetSwingLength||4;
+    if(mode==='counterflow') base=hs.targetCounterLength||Math.max(3,base*.72);
+    else if(mode==='absorption') base=2.4;
+    else if(mode==='balance') base=Math.max(2,base*.56);
+    else if(mode==='release') base=Math.max(3,base*.82);
+    const jitter=.78+rand()*.48;
+    const max=mode==='impulse'?10:mode==='counterflow'?9:mode==='release'?9:6;
+    return clamp(Math.round(base*jitter),2,max);
   }
 
   function createSwingState(m, horizon){
     const q=m.intradaySequence || createIntradaySequence(m,horizon);
     const hs=m.visual?.historyStructure || deriveHistoryPathStructure([]);
-    const counterStartProb=clamp(.08 + hs.roughness*.20 + (m.visual?.absorption||0)*.10,.06,.32);
+    const counterStartProb=clamp(.05 + hs.roughness*.14 + (m.visual?.absorption||0)*.08,.04,.24);
     const mode=rand()<counterStartProb?'counterflow':'impulse';
     const direction=mode==='counterflow'?-q.primaryDir:q.primaryDir;
+    const targetDuration=swingDuration(m,mode);
     return {
       mode,
       direction,
       previousImpulseDir:q.primaryDir,
       age:0,
-      targetDuration:swingDuration(m,mode),
-      strength:clamp(q.baseStrength*(mode==='counterflow'?(.72+hs.roughness*.28):1),.24,.88),
+      targetDuration,
+      minDuration:mode==='counterflow'?Math.max(3,Math.round(targetDuration*.55)):Math.max(2,Math.round(targetDuration*.42)),
+      strength:clamp(q.baseStrength*(mode==='counterflow'?(.94+hs.roughness*.42):1),.28,.98),
       accumulatedMove:0,
-      referenceMove:Math.max(.003,(m.volatilityState?.baseSigma||.002)*3.2),
-      counterTarget:clamp((hs.targetRetracement||.30)*(.78+rand()*.48),.14,.90),
-      localBias:(rand()-.5)*.16,
+      referenceMove:Math.max(.003,(m.volatilityState?.baseSigma||.002)*3.4),
+      counterTarget:clamp((hs.targetRetracement||.30)*(.82+rand()*.38),.16,.92),
+      localBias:(rand()-.5)*.12,
       transitions:0,
       lastTransitionStep:-1,
-      currentEfficiency:1
+      currentEfficiency:1,
+      flowFailureStreak:0,
+      flowSupportStreak:0,
+      localMomentum:0
     };
   }
 
@@ -1664,12 +1868,17 @@
     s.direction=direction||q.primaryDir;
     s.age=0;
     s.targetDuration=swingDuration(m,mode);
+    s.minDuration=mode==='counterflow'?Math.max(3,Math.round(s.targetDuration*.55)):Math.max(2,Math.round(s.targetDuration*.42));
     s.accumulatedMove=0;
-    s.referenceMove=Math.max(referenceMove||oldMove||s.referenceMove||.003,(m.volatilityState?.baseSigma||.002)*2.4);
-    s.counterTarget=clamp((hs.targetRetracement||.30)*(.76+rand()*.52),.12,.92);
-    s.localBias=clamp((rand()-.5)*(.18+hs.roughness*.18),-.24,.24);
-    s.strength=clamp(q.baseStrength*(mode==='counterflow'?(.68+hs.roughness*.42):mode==='absorption'?.34:mode==='balance'?.30:mode==='release'?.88:1),.18,.90);
+    s.referenceMove=Math.max(referenceMove||oldMove||s.referenceMove||.003,(m.volatilityState?.baseSigma||.002)*2.5);
+    s.counterTarget=clamp((hs.targetRetracement||.30)*(.80+rand()*.42),.14,.94);
+    s.localBias=clamp((rand()-.5)*(.14+hs.roughness*.14),-.22,.22);
+    const modeScale=mode==='counterflow'?(.94+hs.roughness*.44):mode==='absorption'?.34:mode==='balance'?.28:mode==='release'?.92:1;
+    s.strength=clamp(q.baseStrength*modeScale,.18,.96);
     if(mode==='impulse'||mode==='release') s.previousImpulseDir=s.direction;
+    s.flowFailureStreak=0;
+    s.flowSupportStreak=0;
+    s.localMomentum=0;
     s.transitions=(s.transitions||0)+1;
     s.lastTransitionStep=step;
     return s;
@@ -1679,42 +1888,46 @@
     const q=m.intradaySequence || createIntradaySequence(m,48);
     const reserves=pressureReserveSnapshot(m);
     const memory=m.memory||{};
+    // Macro bias changes slowly and selects the next major release. It no longer dictates
+    // the sign of every candle inside a local counter-wave.
     return clamp(
-      q.primaryBias*.60 +
-      reserves.balance*.27 +
-      ((memory.buyPersistence||0)-(memory.sellPersistence||0))*.10 -
-      (memory.failedDemand||0)*.05,
+      q.primaryBias*.38 +
+      reserves.balance*.38 +
+      ((memory.buyPersistence||0)-(memory.sellPersistence||0))*.14 -
+      (memory.failedDemand||0)*.06 +
+      (m.visual?.pressureBias||0)*.06,
       -1,1
     );
   }
 
   function intradayPhaseState(m, step, horizon){
     const s=m.swingState || (m.swingState=createSwingState(m,horizon));
-    const liveBias=livePrimaryBias(m);
-    const liveDir=Math.abs(liveBias)>.055?Math.sign(liveBias):(m.intradaySequence?.primaryDir||1);
-    let phase='реализация основного дисбаланса',pulse=0,holdBoost=.08,returnScale=.84;
+    const macroBias=livePrimaryBias(m);
+    const macroDir=Math.abs(macroBias)>.055?Math.sign(macroBias):(m.intradaySequence?.primaryDir||1);
+    let phase='реализация основного дисбаланса',pulse=0,holdBoost=.08,returnScale=.88;
     if(s.mode==='impulse'){
       phase='реализация основного дисбаланса';
       pulse=s.direction*s.strength;
-      holdBoost=.06; returnScale=.88;
+      holdBoost=.05; returnScale=.92;
     } else if(s.mode==='release'){
       phase='реализация основного дисбаланса';
-      pulse=s.direction*s.strength*.92;
-      holdBoost=.08; returnScale=.84;
+      pulse=s.direction*s.strength*.96;
+      holdBoost=.07; returnScale=.90;
     } else if(s.mode==='absorption'){
       phase='локальное удержание';
-      pulse=-s.direction*(.10+s.strength*.24)+s.localBias*.35;
-      holdBoost=.40; returnScale=.50;
+      pulse=-s.direction*(.08+s.strength*.20)+s.localBias*.28;
+      holdBoost=.42; returnScale=.46;
     } else if(s.mode==='counterflow'){
       phase='встречная реакция';
-      pulse=s.direction*s.strength;
-      holdBoost=.08; returnScale=.82;
+      // A counter-wave is a real local regime lasting several candles, not a one-bar correction.
+      pulse=s.direction*s.strength*1.08;
+      holdBoost=.06; returnScale=.96;
     } else {
       phase='временный баланс';
-      pulse=s.localBias;
-      holdBoost=.48; returnScale=.46;
+      pulse=s.localBias*.72;
+      holdBoost=.50; returnScale=.42;
     }
-    return {phase,pulse,holdBoost,returnScale,swingMode:s.mode,swingDirection:s.direction,liveBias,liveDir};
+    return {phase,pulse,holdBoost,returnScale,swingMode:s.mode,swingDirection:s.direction,macroBias,macroDir};
   }
 
   function updateSwingState(m, step, ctx){
@@ -1724,6 +1937,7 @@
     const memory=m.memory||{};
     s.age+=1;
     s.accumulatedMove+=finite(ctx.ret,0);
+    s.localMomentum=s.localMomentum*.56+finite(ctx.ret,0)*.44;
     m.pathTravel=(m.pathTravel||0)+Math.abs(finite(ctx.ret,0));
     const logNet=Math.abs(Math.log(finitePositive(m.price,1)/finitePositive(m.startPrice,1)));
     s.currentEfficiency=clamp(logNet/Math.max(1e-8,m.pathTravel||0),0,1);
@@ -1732,7 +1946,12 @@
     const reserveAfter=ctx.reserveAfter||pressureReserveSnapshot(m);
     const driverExhaustion=dir<0?reserveAfter.supplyExhaustion:reserveAfter.demandExhaustion;
     const receiverResource=dir<0?reserveAfter.demandShare:reserveAfter.supplyShare;
-    const sameFlow=Math.sign(ctx.net||0)===dir;
+    const flowDir=Math.sign(ctx.net||0);
+    const sameFlow=flowDir===dir;
+    if(sameFlow && (ctx.imbalance||0)>.09){ s.flowSupportStreak=Math.min(6,(s.flowSupportStreak||0)+1); s.flowFailureStreak=Math.max(0,(s.flowFailureStreak||0)-1); }
+    else if(flowDir && flowDir!==dir && (ctx.imbalance||0)>.14){ s.flowFailureStreak=Math.min(6,(s.flowFailureStreak||0)+1); s.flowSupportStreak=Math.max(0,(s.flowSupportStreak||0)-1); }
+    else { s.flowFailureStreak=Math.max(0,(s.flowFailureStreak||0)-1); }
+
     const expected=Math.max((ctx.sigma||.001)*.72,(ctx.impactMagnitude||0)*.46,.00055);
     const weakResponse=sameFlow && (ctx.imbalance||0)>.14 && Math.abs(ctx.ret||0)<expected;
     const absorptionScore=clamp(
@@ -1741,38 +1960,41 @@
       driverExhaustion*.25 +
       receiverResource*.13 +
       (weakResponse?.22:0) +
-      Math.max(0,s.currentEfficiency-(hs.targetEfficiency||.58))*.48,
+      Math.max(0,s.currentEfficiency-(hs.targetEfficiency||.56))*.52,
       0,1.4
     );
-    const roughnessPressure=clamp((s.currentEfficiency-(hs.targetEfficiency||.58))*1.35,0,.72);
-    const ageReady=s.age>=2;
+    const roughnessPressure=clamp((s.currentEfficiency-(hs.targetEfficiency||.56))*1.45,0,.78);
+    const ageReady=s.age>=s.minDuration;
     const maxed=s.age>=s.targetDuration;
 
     if(s.mode==='impulse' || s.mode==='release'){
       const move=Math.abs(s.accumulatedMove);
       const moveUnits=move/Math.max(ctx.sigma||.001,.0007);
       const shouldAbsorb=ageReady && (
-        absorptionScore>.56 ||
-        driverExhaustion>.44 ||
-        moveUnits>Math.max(2.2,(hs.targetSwingLength||3)*.86) ||
-        (roughnessPressure>.12 && rand()<roughnessPressure) ||
+        absorptionScore>.54 ||
+        driverExhaustion>.46 ||
+        moveUnits>Math.max(2.6,(hs.targetSwingLength||4)*.90) ||
+        (roughnessPressure>.14 && rand()<roughnessPressure*.86) ||
         maxed
       );
-      if(shouldAbsorb){
-        transitionSwing(m,'absorption',dir,step,move);
-      }
+      if(shouldAbsorb) transitionSwing(m,'absorption',dir,step,move);
       return;
     }
 
     if(s.mode==='absorption'){
-      const counterCapacity=clamp(receiverResource*(1-(dir<0?reserveAfter.demandExhaustion:reserveAfter.supplyExhaustion)),0,1);
-      const counterProb=clamp(.18 + absorptionScore*.34 + hs.roughness*.28 + counterCapacity*.22 + roughnessPressure*.28,.12,.84);
-      if(ageReady && (absorptionScore>.43 || s.age>=s.targetDuration)){
-        if(counterCapacity>.12 && rand()<counterProb){
-          transitionSwing(m,'counterflow',-dir,step,s.referenceMove);
-        } else {
-          const liveDir=Math.abs(livePrimaryBias(m))>.05?Math.sign(livePrimaryBias(m)):q.primaryDir;
-          transitionSwing(m,'release',liveDir,step,s.referenceMove);
+      const receiverExhaustion=dir<0?reserveAfter.demandExhaustion:reserveAfter.supplyExhaustion;
+      const directCapacity=clamp(receiverResource*(1-receiverExhaustion),0,1);
+      // A bounce can also be produced by exhaustion/profit-taking of the driving side; it does
+      // not require a huge pool of fresh opposite capital.
+      const exhaustionCapacity=clamp(driverExhaustion*.48 + (memory.absorptionConfidence||0)*.18 + (memory.capitalDepletion||0)*.10,0,.72);
+      const counterCapacity=Math.max(directCapacity,exhaustionCapacity);
+      const structuralNeed=roughnessPressure>.15;
+      const counterProb=clamp(.28 + absorptionScore*.33 + hs.roughness*.34 + counterCapacity*.26 + roughnessPressure*.34 + (structuralNeed?.10:0),.18,.94);
+      if(ageReady && (absorptionScore>.38 || maxed || structuralNeed)){
+        if(counterCapacity>.07 && rand()<counterProb) transitionSwing(m,'counterflow',-dir,step,s.referenceMove);
+        else {
+          const macro=livePrimaryBias(m), nextDir=Math.abs(macro)>.05?Math.sign(macro):q.primaryDir;
+          transitionSwing(m,'release',nextDir,step,s.referenceMove);
         }
       }
       return;
@@ -1782,14 +2004,15 @@
       const move=Math.abs(s.accumulatedMove);
       const retraceProgress=move/Math.max(.001,s.referenceMove||.003);
       const counterExhaustion=s.direction>0?reserveAfter.demandExhaustion:reserveAfter.supplyExhaustion;
-      const flowFailure=Math.sign(ctx.net||0)!==s.direction && (ctx.imbalance||0)>.17;
-      const globalAgainst=Math.sign(livePrimaryBias(m))===-s.direction && Math.abs(livePrimaryBias(m))>.18;
       const targetReached=retraceProgress>=s.counterTarget;
-      if(ageReady && (targetReached || counterExhaustion>.46 || flowFailure || globalAgainst && s.age>=3 || maxed)){
-        const goBalance=hs.roughness>.34 && rand()<clamp(.24+hs.turnRate*.70,.18,.62);
+      const failed=s.flowFailureStreak>=2;
+      // Macro bias is deliberately NOT an exit trigger. A local counter-wave can persist
+      // against the global scenario until its own flow/resource actually fails.
+      if(ageReady && (targetReached || counterExhaustion>.58 || failed || maxed)){
+        const goBalance=hs.roughness>.30 && rand()<clamp(.22+hs.turnRate*.85,.16,.64);
         if(goBalance) transitionSwing(m,'balance',s.direction,step,s.referenceMove);
         else {
-          const nextDir=Math.abs(livePrimaryBias(m))>.05?Math.sign(livePrimaryBias(m)):q.primaryDir;
+          const macro=livePrimaryBias(m), nextDir=Math.abs(macro)>.05?Math.sign(macro):q.primaryDir;
           transitionSwing(m,'release',nextDir,step,s.referenceMove);
         }
       }
@@ -1797,11 +2020,11 @@
     }
 
     if(s.mode==='balance'){
-      const live=livePrimaryBias(m);
-      const decisive=Math.abs(live)>.14 || (ctx.imbalance||0)>.26;
-      if((s.age>=2 && decisive) || maxed){
-        let nextDir=Math.abs(live)>.05?Math.sign(live):q.primaryDir;
-        if((ctx.imbalance||0)>.30 && Math.sign(ctx.net||0)) nextDir=Math.sign(ctx.net);
+      const macro=livePrimaryBias(m);
+      const decisive=Math.abs(macro)>.13 || (ctx.imbalance||0)>.27;
+      if((ageReady && decisive) || maxed){
+        let nextDir=Math.abs(macro)>.05?Math.sign(macro):q.primaryDir;
+        if((ctx.imbalance||0)>.32 && flowDir) nextDir=flowDir;
         transitionSwing(m,'release',nextDir,step,s.referenceMove);
       }
     }
@@ -2264,14 +2487,14 @@
     const eventAbs=Math.abs(context.eventShock||0);
     const balanceBoost=phase==='временный баланс' ? 1.10 : phase==='встречная реакция' ? 1.04 : phase==='локальное удержание' ? 1.02 : 1.0;
     const bodyMultiplier=clamp(context.bodyMultiplier||1, .85, 2.0);
-    const wickMultiplier=clamp(context.wickMultiplier||1, .90, 3.0);
-    const baseExcursion=clamp((.00048 + absRet*.17 + sigma*.58 + imbalance*.00115 + stress*.00095 + flowIntensity*.00095 + eventAbs*.24)*balanceBoost*bodyMultiplier,.00045,.014);
+    const wickMultiplier=clamp(context.wickMultiplier||1, .88, 2.35);
+    const baseExcursion=clamp((.00042 + absRet*.14 + sigma*.44 + imbalance*.00095 + stress*.00078 + flowIntensity*.00082 + eventAbs*.20)*balanceBoost*bodyMultiplier,.00040,.0115);
     const seed=Math.abs((o*100003+c*37013+(context.net||0)*911));
     const n1=.56+seededNoise(seed+1.7)*.84;
     const n2=.56+seededNoise(seed+3.9)*.84;
     const asymmetry=eventAbs>.003 ? (1 + eventAbs*12) : 1;
-    const counterSide=baseExcursion*(.66 + (1-imbalance)*.28 + sigma*14*.06)*n1*wickMultiplier;
-    const continuationSide=baseExcursion*(.54 + imbalance*.34 + eventAbs*18*.08)*n2*asymmetry*wickMultiplier;
+    const counterSide=baseExcursion*(.62 + (1-imbalance)*.24 + sigma*12*.05)*n1*wickMultiplier;
+    const continuationSide=baseExcursion*(.50 + imbalance*.30 + eventAbs*16*.07)*n2*asymmetry*wickMultiplier;
     let high=Math.max(o,c), low=Math.min(o,c);
     if(dir>0){
       high=Math.max(high,Math.max(o,c)*Math.exp(continuationSide));
@@ -2349,7 +2572,7 @@
           .14*memory.capitalDepletion -
           .16*memory.failedDemand +
           .20*reserveDemandSupport +
-          .48*Math.max(0,phase.pulse) -
+          .62*Math.max(0,phase.pulse) -
           .12*reserveSupplyPressure -
           .30*reserveBefore.demandExhaustion +
           .10*reserveBefore.supplyExhaustion +
@@ -2374,7 +2597,7 @@
           .22*memorySellPressure +
           .12*memory.failedDemand +
           .20*reserveSupplyPressure +
-          .48*Math.max(0,-phase.pulse) -
+          .62*Math.max(0,-phase.pulse) -
           .10*reserveDemandSupport -
           .28*reserveBefore.supplyExhaustion +
           .12*reserveBefore.demandExhaustion +
@@ -2517,22 +2740,30 @@
     const sigma=volState.currentSigma;
 
     const cascadeDirection=clamp(m.freshDemandStress - m.lossReactionStress - m.profitReleaseStress*.72,-1,1);
-    const baseBehaviorRet=
-      Math.sign(net||1)*impactMagnitude +
-      .0012*v.pressureBias*(.35+.65*m.attention) +
-      .0010*regimeDirection*(.4+.6*m.attention) +
-      .0007*Math.sign(crowdShock||1)*v.reflexivity*(1-fatigue) +
-      .0011*cascadeDirection*m.cascadeIntensity +
-      .0008*(memory.buyPersistence-memory.sellPersistence) -
-      .0006*memory.failedDemand;
-
-    const swingDrift=phase.pulse*sigma*(.58 + (m.visual?.historyStructure?.waveStrength||1)*.18);
-    const drift=baseBehaviorRet*phase.returnScale + swingDrift;
+    // Three direction layers are deliberately separated:
+    // macro context selects the broad scenario, local swing controls the multi-bar wave,
+    // and micro noise only perturbs individual candles.
+    const flowRet=Math.sign(net||phase.swingDirection||1)*impactMagnitude;
+    const macroContextRet=
+      .0010*v.pressureBias*(.35+.65*m.attention) +
+      .00085*regimeDirection*(.4+.6*m.attention) +
+      .00062*Math.sign(crowdShock||1)*v.reflexivity*(1-fatigue) +
+      .00092*cascadeDirection*m.cascadeIntensity +
+      .00065*(memory.buyPersistence-memory.sellPersistence) -
+      .00050*memory.failedDemand;
+    const macroGate=phase.swingMode==='counterflow'?.20:phase.swingMode==='absorption'?.30:phase.swingMode==='balance'?.26:phase.swingMode==='release'?.66:.72;
+    const localScale=phase.swingMode==='counterflow'?1.92:phase.swingMode==='impulse'?1.24:phase.swingMode==='release'?1.16:phase.swingMode==='absorption'?.24:.10;
+    const waveStrength=m.visual?.historyStructure?.waveStrength||1;
+    const momentumCarry=(m.swingState?.localMomentum||0)*(phase.swingMode==='counterflow'?.30:phase.swingMode==='impulse'?.22:phase.swingMode==='release'?.20:.08);
+    const swingDrift=phase.pulse*sigma*(localScale + waveStrength*.24) + momentumCarry;
+    const drift=(flowRet + macroContextRet*macroGate)*phase.returnScale + swingDrift;
     const localShock=gauss()*sigma;
-    const meanRevert=-recentRet*volState.meanReversion*(phase.swingMode==='balance'?1.34:phase.swingMode==='absorption'?1.18:.82)*clamp(1+streak*.045,1,1.42);
-    const counterChance=clamp(.08 + Math.max(0,streak-3)*.035 + (phase.swingMode==='balance'?.10:0) + (phase.swingMode==='absorption'?.08:0) + stress*.05 + (volState.meanReversion-.08)*.75,.06,.38);
+    const revertMode=phase.swingMode==='balance'?1.34:phase.swingMode==='absorption'?1.18:phase.swingMode==='counterflow'?.22:phase.swingMode==='impulse'?.26:.32;
+    const meanRevert=-recentRet*volState.meanReversion*revertMode*clamp(1+streak*.035,1,1.34);
+    const activeWave=phase.swingMode==='counterflow'||phase.swingMode==='impulse'||phase.swingMode==='release';
+    const counterChance=clamp((activeWave?.025:.10) + Math.max(0,streak-4)*.022 + (phase.swingMode==='balance'?.12:0) + (phase.swingMode==='absorption'?.10:0) + stress*.035,.02,.30);
     const counterKick=(recentSign && rand()<counterChance)
-      ? -recentSign*clamp((.34 + Math.abs(gauss())*.72)*sigma*(1+streak*.08), sigma*.22, sigma*1.55)
+      ? -recentSign*clamp((.30 + Math.abs(gauss())*.62)*sigma*(1+streak*.05), sigma*.18, sigma*1.28)
       : 0;
 
     if(volState.eventCooldown>0) volState.eventCooldown--;
@@ -2548,8 +2779,9 @@
     const eventProbability=volState.eventCooldown>0 ? 0 : rawEventProbability;
     let eventShock=0;
     if(rand()<eventProbability){
+      const localDirectional=(phase.swingMode==='impulse'||phase.swingMode==='counterflow'||phase.swingMode==='release')?phase.swingDirection:0;
       const directionalBias=Math.sign(net)||Math.sign(drift)||Math.sign(phase.pulse)||1;
-      let shockSign=directionalBias;
+      let shockSign=(localDirectional && rand()<.74)?localDirectional:directionalBias;
       const budgetUsage=clamp(Math.abs(logFromStart)/Math.max(.0001,budget),0,1.4);
       const counterEventProb=clamp(.10 + Math.max(0,streak-4)*.03 + Math.max(0,budgetUsage-.58)*.22 + (phase.swingMode==='balance'?.06:0),.07,.38);
       if(recentSign && rand()<counterEventProb) shockSign=-recentSign;
